@@ -141,6 +141,7 @@ type ModelPricingInput struct {
 	Currency                    string
 	IsFree                      bool
 	PricingMode                 string
+	PricingMultiplier           float64
 	InputNanousdPerMTokens      int64
 	CacheReadNanousdPerMTokens  int64
 	CacheWriteNanousdPerMTokens int64
@@ -1267,20 +1268,22 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 	var tieredPricingJSON string
 	var tieredTiers []tieredPricingTier
 	pricingMode := domainbilling.PricingModeToken
+	pricingMultiplier := 1.0
 	isFreeModel := pricing != nil && pricing.IsFree
 	if pricing != nil {
 		currency = pricing.Currency
 		pricingMode = normalizePricingMode(pricing.PricingMode)
+		pricingMultiplier = normalizePricingMultiplier(pricing.PricingMultiplier)
 		tieredPricingJSON = strings.TrimSpace(pricing.TieredPricingJSON)
 	}
 	if !input.ServiceOnly && mode != "self" && pricing != nil && !pricing.IsFree {
 		switch pricingMode {
 		case domainbilling.PricingModeCall:
 			baseCallNanousdPerCall = pricing.CallNanousdPerCall
-			callNanousdPerCall = applyRateMultiplier(baseCallNanousdPerCall, rateMultiplier)
+			callNanousdPerCall = applyPricingAndRateMultipliers(baseCallNanousdPerCall, pricingMultiplier, rateMultiplier)
 		case domainbilling.PricingModeDuration:
 			baseDurationNanousdPerSecond = pricing.DurationNanousdPerSecond
-			durationNanousdPerSecond = applyRateMultiplier(baseDurationNanousdPerSecond, rateMultiplier)
+			durationNanousdPerSecond = applyPricingAndRateMultipliers(baseDurationNanousdPerSecond, pricingMultiplier, rateMultiplier)
 		case domainbilling.PricingModeTiered:
 			tieredTiers, err = parseTieredPricingTiers(tieredPricingJSON)
 			if err != nil {
@@ -1305,12 +1308,12 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 				"1h",
 			)
 			baseOutputNanousdPerMTokens = pricing.OutputNanousdPerMTokens
-			inputNanousdPerMTokens = applyRateMultiplier(baseInputNanousdPerMTokens, rateMultiplier)
-			cacheReadNanousdPerMTokens = applyRateMultiplier(baseCacheReadNanousdPerMTokens, rateMultiplier)
-			cacheWriteNanousdPerMTokens = applyRateMultiplier(baseCacheWriteNanousdPerMTokens, rateMultiplier)
-			cacheWrite5mNanousdPerMTokens = applyRateMultiplier(baseCacheWrite5mNanousdPerMTokens, rateMultiplier)
-			cacheWrite1hNanousdPerMTokens = applyRateMultiplier(baseCacheWrite1hNanousdPerMTokens, rateMultiplier)
-			outputNanousdPerMTokens = applyRateMultiplier(baseOutputNanousdPerMTokens, rateMultiplier)
+			inputNanousdPerMTokens = applyPricingAndRateMultipliers(baseInputNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			cacheReadNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheReadNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			cacheWriteNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWriteNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			cacheWrite5mNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWrite5mNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			cacheWrite1hNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWrite1hNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			outputNanousdPerMTokens = applyPricingAndRateMultipliers(baseOutputNanousdPerMTokens, pricingMultiplier, rateMultiplier)
 		}
 	}
 
@@ -1367,12 +1370,12 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 				"1h",
 			)
 			baseOutputNanousdPerMTokens = tier.outputNanousdPerMTokens
-			inputNanousdPerMTokens = applyRateMultiplier(baseInputNanousdPerMTokens, rateMultiplier)
-			cacheReadNanousdPerMTokens = applyRateMultiplier(baseCacheReadNanousdPerMTokens, rateMultiplier)
-			cacheWriteNanousdPerMTokens = applyRateMultiplier(baseCacheWriteNanousdPerMTokens, rateMultiplier)
-			cacheWrite5mNanousdPerMTokens = applyRateMultiplier(baseCacheWrite5mNanousdPerMTokens, rateMultiplier)
-			cacheWrite1hNanousdPerMTokens = applyRateMultiplier(baseCacheWrite1hNanousdPerMTokens, rateMultiplier)
-			outputNanousdPerMTokens = applyRateMultiplier(baseOutputNanousdPerMTokens, rateMultiplier)
+			inputNanousdPerMTokens = applyPricingAndRateMultipliers(baseInputNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			cacheReadNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheReadNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			cacheWriteNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWriteNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			cacheWrite5mNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWrite5mNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			cacheWrite1hNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWrite1hNanousdPerMTokens, pricingMultiplier, rateMultiplier)
+			outputNanousdPerMTokens = applyPricingAndRateMultipliers(baseOutputNanousdPerMTokens, pricingMultiplier, rateMultiplier)
 			inputBilledNanousd = calcNanousdByToken(input.InputTokens, inputNanousdPerMTokens)
 			cacheReadBilledNanousd = calcNanousdByToken(input.CacheReadTokens, cacheReadNanousdPerMTokens)
 			cacheWriteBilledNanousd = calcCacheWriteBilledNanousd(cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, cacheWriteNanousdPerMTokens, cacheWrite5mNanousdPerMTokens, cacheWrite1hNanousdPerMTokens)
@@ -1429,6 +1432,7 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 		"rate_multiplier":                          billingRateMultiplierValue(rateMultiplier),
 		"billing_mode":                             mode,
 		"pricing_mode":                             pricingMode,
+		"pricing_multiplier":                       pricingMultiplier,
 		"is_free_model":                            isFreeModel,
 		"currency":                                 currency,
 		"input_nanousd_per_m_tokens":               inputNanousdPerMTokens,
@@ -1595,27 +1599,29 @@ func clonePublicModelPricingMap(input map[string]PublicModelPricing) map[string]
 
 func toPublicModelPricing(item domainbilling.ModelPricing) PublicModelPricing {
 	mode := normalizePricingMode(item.PricingMode)
+	pricingMultiplier := normalizePricingMultiplier(item.PricingMultiplier)
 	result := PublicModelPricing{
 		Currency:                firstNonEmpty(item.Currency, "USD"),
 		IsFree:                  item.IsFree,
 		Mode:                    mode,
-		InputUSDPerMTokens:      nanousdToUSD(item.InputNanousdPerMTokens),
-		CacheReadUSDPerMTokens:  nanousdToUSD(item.CacheReadNanousdPerMTokens),
-		CacheWriteUSDPerMTokens: nanousdToUSD(item.CacheWriteNanousdPerMTokens),
-		OutputUSDPerMTokens:     nanousdToUSD(item.OutputNanousdPerMTokens),
-		CallUSDPerCall:          nanousdToUSD(item.CallNanousdPerCall),
-		DurationUSDPerSecond:    nanousdToUSD(item.DurationNanousdPerSecond),
+		PricingMultiplier:       pricingMultiplier,
+		InputUSDPerMTokens:      nanousdToUSD(applyPricingMultiplier(item.InputNanousdPerMTokens, pricingMultiplier)),
+		CacheReadUSDPerMTokens:  nanousdToUSD(applyPricingMultiplier(item.CacheReadNanousdPerMTokens, pricingMultiplier)),
+		CacheWriteUSDPerMTokens: nanousdToUSD(applyPricingMultiplier(item.CacheWriteNanousdPerMTokens, pricingMultiplier)),
+		OutputUSDPerMTokens:     nanousdToUSD(applyPricingMultiplier(item.OutputNanousdPerMTokens, pricingMultiplier)),
+		CallUSDPerCall:          nanousdToUSD(applyPricingMultiplier(item.CallNanousdPerCall, pricingMultiplier)),
+		DurationUSDPerSecond:    nanousdToUSD(applyPricingMultiplier(item.DurationNanousdPerSecond, pricingMultiplier)),
 	}
 	if mode == domainbilling.PricingModeTiered {
 		tiers, err := parseTieredPricingTiers(item.TieredPricingJSON)
 		if err == nil {
-			result.Tiers = toPublicModelPricingTiers(tiers)
+			result.Tiers = toPublicModelPricingTiers(tiers, pricingMultiplier)
 		}
 	}
 	return result
 }
 
-func toPublicModelPricingTiers(tiers []tieredPricingTier) []PublicModelPricingTier {
+func toPublicModelPricingTiers(tiers []tieredPricingTier, pricingMultiplier float64) []PublicModelPricingTier {
 	results := make([]PublicModelPricingTier, 0, len(tiers))
 	previousLimit := int64(0)
 	for _, tier := range tiers {
@@ -1627,10 +1633,10 @@ func toPublicModelPricingTiers(tiers []tieredPricingTier) []PublicModelPricingTi
 		results = append(results, PublicModelPricingTier{
 			FromTokens:              previousLimit,
 			UpToTokens:              upToTokens,
-			InputUSDPerMTokens:      nanousdToUSD(tier.inputNanousdPerMTokens),
-			CacheReadUSDPerMTokens:  nanousdToUSD(tier.cacheReadNanousdPerMTokens),
-			CacheWriteUSDPerMTokens: nanousdToUSD(tier.cacheWriteNanousdPerMTokens),
-			OutputUSDPerMTokens:     nanousdToUSD(tier.outputNanousdPerMTokens),
+			InputUSDPerMTokens:      nanousdToUSD(applyPricingMultiplier(tier.inputNanousdPerMTokens, pricingMultiplier)),
+			CacheReadUSDPerMTokens:  nanousdToUSD(applyPricingMultiplier(tier.cacheReadNanousdPerMTokens, pricingMultiplier)),
+			CacheWriteUSDPerMTokens: nanousdToUSD(applyPricingMultiplier(tier.cacheWriteNanousdPerMTokens, pricingMultiplier)),
+			OutputUSDPerMTokens:     nanousdToUSD(applyPricingMultiplier(tier.outputNanousdPerMTokens, pricingMultiplier)),
 		})
 		if tier.UpToTokens > 0 {
 			previousLimit = tier.UpToTokens
@@ -1688,6 +1694,7 @@ func (s *Service) UpsertModelPricing(ctx context.Context, input ModelPricingInpu
 		Currency:                    "USD",
 		IsFree:                      input.IsFree,
 		PricingMode:                 pricingMode,
+		PricingMultiplier:           normalizePricingMultiplier(input.PricingMultiplier),
 		InputNanousdPerMTokens:      inputNanousdPerMTokens,
 		CacheReadNanousdPerMTokens:  cacheReadNanousdPerMTokens,
 		CacheWriteNanousdPerMTokens: cacheWriteNanousdPerMTokens,
@@ -1745,6 +1752,7 @@ func usageServiceItemSnapshots(items []domainbilling.UsageServiceItem) []map[str
 			"fast_mode":                           item.FastMode,
 			"rate_multiplier":                     item.RateMultiplier,
 			"pricing_mode":                        item.PricingMode,
+			"pricing_multiplier":                  item.PricingMultiplier,
 			"input_tokens":                        item.InputTokens,
 			"cache_read_tokens":                   item.CacheReadTokens,
 			"cache_write_tokens":                  item.CacheWriteTokens,
@@ -1809,6 +1817,7 @@ func (s *Service) buildUsageServiceItem(ctx context.Context, input ServiceUsageI
 		FastMode:           fastMode,
 		RateMultiplier:     billingRateMultiplierValue(rateMultiplier),
 		PricingMode:        domainbilling.PricingModeToken,
+		PricingMultiplier:  1,
 		InputTokens:        clampNonNegative(input.InputTokens),
 		CacheReadTokens:    clampNonNegative(input.CacheReadTokens),
 		CacheWriteTokens:   cacheWriteTokens,
@@ -1847,12 +1856,13 @@ func (s *Service) buildUsageServiceItem(ctx context.Context, input ServiceUsageI
 		return item, nil
 	}
 	item.PricingMode = normalizePricingMode(pricing.PricingMode)
+	item.PricingMultiplier = normalizePricingMultiplier(pricing.PricingMultiplier)
 	switch item.PricingMode {
 	case domainbilling.PricingModeCall:
-		item.CallNanousdPerCall = applyRateMultiplier(pricing.CallNanousdPerCall, rateMultiplier)
+		item.CallNanousdPerCall = applyPricingAndRateMultipliers(pricing.CallNanousdPerCall, item.PricingMultiplier, rateMultiplier)
 		item.CallBilledNanousd = item.CallCount * item.CallNanousdPerCall
 	case domainbilling.PricingModeDuration:
-		item.DurationNanousdPerSecond = applyRateMultiplier(pricing.DurationNanousdPerSecond, rateMultiplier)
+		item.DurationNanousdPerSecond = applyPricingAndRateMultipliers(pricing.DurationNanousdPerSecond, item.PricingMultiplier, rateMultiplier)
 		if item.DurationSeconds <= 0 {
 			item.DurationSeconds = 1
 		}
@@ -1885,12 +1895,12 @@ func (s *Service) buildUsageServiceItem(ctx context.Context, input ServiceUsageI
 			"1h",
 		)
 		baseOutputNanousdPerMTokens := tier.outputNanousdPerMTokens
-		item.InputNanousdPerMTokens = applyRateMultiplier(baseInputNanousdPerMTokens, rateMultiplier)
-		item.CacheReadNanousdPerMTokens = applyRateMultiplier(baseCacheReadNanousdPerMTokens, rateMultiplier)
-		item.CacheWriteNanousdPerMTokens = applyRateMultiplier(baseCacheWriteNanousdPerMTokens, rateMultiplier)
-		item.CacheWrite5mNanousdPerMTokens = applyRateMultiplier(baseCacheWrite5mNanousdPerMTokens, rateMultiplier)
-		item.CacheWrite1hNanousdPerMTokens = applyRateMultiplier(baseCacheWrite1hNanousdPerMTokens, rateMultiplier)
-		item.OutputNanousdPerMTokens = applyRateMultiplier(baseOutputNanousdPerMTokens, rateMultiplier)
+		item.InputNanousdPerMTokens = applyPricingAndRateMultipliers(baseInputNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.CacheReadNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheReadNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.CacheWriteNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWriteNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.CacheWrite5mNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWrite5mNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.CacheWrite1hNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWrite1hNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.OutputNanousdPerMTokens = applyPricingAndRateMultipliers(baseOutputNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
 		item.InputBilledNanousd = calcNanousdByToken(item.InputTokens, item.InputNanousdPerMTokens)
 		item.CacheReadBilledNanousd = calcNanousdByToken(item.CacheReadTokens, item.CacheReadNanousdPerMTokens)
 		item.CacheWriteBilledNanousd = calcCacheWriteBilledNanousd(item.CacheWriteTokens, item.CacheWrite5mTokens, item.CacheWrite1hTokens, item.CacheWriteNanousdPerMTokens, item.CacheWrite5mNanousdPerMTokens, item.CacheWrite1hNanousdPerMTokens)
@@ -1917,12 +1927,12 @@ func (s *Service) buildUsageServiceItem(ctx context.Context, input ServiceUsageI
 			"1h",
 		)
 		baseOutputNanousdPerMTokens := pricing.OutputNanousdPerMTokens
-		item.InputNanousdPerMTokens = applyRateMultiplier(baseInputNanousdPerMTokens, rateMultiplier)
-		item.CacheReadNanousdPerMTokens = applyRateMultiplier(baseCacheReadNanousdPerMTokens, rateMultiplier)
-		item.CacheWriteNanousdPerMTokens = applyRateMultiplier(baseCacheWriteNanousdPerMTokens, rateMultiplier)
-		item.CacheWrite5mNanousdPerMTokens = applyRateMultiplier(baseCacheWrite5mNanousdPerMTokens, rateMultiplier)
-		item.CacheWrite1hNanousdPerMTokens = applyRateMultiplier(baseCacheWrite1hNanousdPerMTokens, rateMultiplier)
-		item.OutputNanousdPerMTokens = applyRateMultiplier(baseOutputNanousdPerMTokens, rateMultiplier)
+		item.InputNanousdPerMTokens = applyPricingAndRateMultipliers(baseInputNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.CacheReadNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheReadNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.CacheWriteNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWriteNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.CacheWrite5mNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWrite5mNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.CacheWrite1hNanousdPerMTokens = applyPricingAndRateMultipliers(baseCacheWrite1hNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
+		item.OutputNanousdPerMTokens = applyPricingAndRateMultipliers(baseOutputNanousdPerMTokens, item.PricingMultiplier, rateMultiplier)
 		item.InputBilledNanousd = calcNanousdByToken(item.InputTokens, item.InputNanousdPerMTokens)
 		item.CacheReadBilledNanousd = calcNanousdByToken(item.CacheReadTokens, item.CacheReadNanousdPerMTokens)
 		item.CacheWriteBilledNanousd = calcCacheWriteBilledNanousd(item.CacheWriteTokens, item.CacheWrite5mTokens, item.CacheWrite1hTokens, item.CacheWriteNanousdPerMTokens, item.CacheWrite5mNanousdPerMTokens, item.CacheWrite1hNanousdPerMTokens)
@@ -2357,6 +2367,28 @@ func applyRateMultiplier(rate int64, multiplier billingRateMultiplier) int64 {
 	return (rate*multiplier.Numerator + multiplier.Denominator/2) / multiplier.Denominator
 }
 
+func normalizePricingMultiplier(value float64) float64 {
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 1
+	}
+	return value
+}
+
+func applyPricingMultiplier(rate int64, multiplier float64) int64 {
+	if rate <= 0 {
+		return 0
+	}
+	multiplier = normalizePricingMultiplier(multiplier)
+	if multiplier == 1 {
+		return rate
+	}
+	return int64(math.Round(float64(rate) * multiplier))
+}
+
+func applyPricingAndRateMultipliers(rate int64, pricingMultiplier float64, rateMultiplier billingRateMultiplier) int64 {
+	return applyRateMultiplier(applyPricingMultiplier(rate, pricingMultiplier), rateMultiplier)
+}
+
 func normalizeBillingRateMultiplier(multiplier billingRateMultiplier) billingRateMultiplier {
 	if multiplier.Numerator <= 0 || multiplier.Denominator <= 0 {
 		return billingRateMultiplier{Numerator: 1, Denominator: 1}
@@ -2709,6 +2741,7 @@ func buildNativeToolServiceItems(input UsagePricingInput, billingMode string, is
 			ProviderProtocol:   strings.TrimSpace(input.ProviderProtocol),
 			RateMultiplier:     1,
 			PricingMode:        domainbilling.PricingModeCall,
+			PricingMultiplier:  1,
 			CallCount:          count,
 			CallNanousdPerCall: price.NanousdPerCall,
 			CallBilledNanousd:  billed,

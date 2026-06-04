@@ -31,6 +31,7 @@ import {
   normalizePricingMode,
   parseIntValue,
   parsePrice,
+  parseValidPricingMultiplier,
   stringifyTieredPricing,
   type PlanFormState,
   type PricingMode,
@@ -42,11 +43,13 @@ type PricingJSONValue = Record<string, unknown>;
 
 function pricingFormToJSON(form: PricingFormState): string {
   const pricingMode = normalizePricingMode(form.pricingMode);
+  const pricingMultiplier = parseValidPricingMultiplier(form.pricingMultiplier) ?? form.pricingMultiplier;
   const payload = {
     platformModelName: form.platformModelName,
     currency: "USD",
     isFree: form.isFree,
     pricingMode,
+    pricingMultiplier,
     inputUSDPerMTokens: pricingMode === "token" ? parsePrice(form.input) : 0,
     cacheReadUSDPerMTokens: pricingMode === "token" ? parsePrice(form.cacheRead) : 0,
     cacheWriteUSDPerMTokens: pricingMode === "token" ? parsePrice(form.cacheWrite) : 0,
@@ -65,6 +68,18 @@ function readPricingNumber(payload: PricingJSONValue, key: string): string {
   }
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : "0";
+}
+
+function readPricingMultiplier(payload: PricingJSONValue, fallback: string, invalidMessage: string): string {
+  const value = payload.pricingMultiplier;
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) {
+    throw new Error(invalidMessage);
+  }
+  return String(parsed);
 }
 
 function readPricingMode(value: unknown): PricingMode | null {
@@ -95,7 +110,7 @@ function tieredTiersFromJSON(payload: PricingJSONValue): TieredPricingTierForm[]
   });
 }
 
-function pricingFormFromJSON(current: PricingFormState, raw: string, messages: { root: string; model: string; mode: string; tiered: string }): PricingFormState {
+function pricingFormFromJSON(current: PricingFormState, raw: string, messages: { root: string; model: string; mode: string; multiplier: string; tiered: string }): PricingFormState {
   const parsed = JSON.parse(raw) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(messages.root);
@@ -112,6 +127,7 @@ function pricingFormFromJSON(current: PricingFormState, raw: string, messages: {
   const next: PricingFormState = {
     ...current,
     pricingMode,
+    pricingMultiplier: readPricingMultiplier(payload, current.pricingMultiplier || "1", messages.multiplier),
     isFree: typeof payload.isFree === "boolean" ? payload.isFree : current.isFree,
     input: pricingMode === "token" ? readPricingNumber(payload, "inputUSDPerMTokens") : "0",
     cacheRead: pricingMode === "token" ? readPricingNumber(payload, "cacheReadUSDPerMTokens") : "0",
@@ -250,6 +266,7 @@ export function PricingBillingDialog({
   const [jsonDraft, setJSONDraft] = React.useState("");
   const [jsonError, setJSONError] = React.useState("");
   const lastSyncedJSONRef = React.useRef("");
+  const pricingMultiplierError = form && parseValidPricingMultiplier(form.pricingMultiplier) === null ? t("modelPricing.jsonErrors.multiplier") : "";
 
   React.useEffect(() => {
     if (!open || !form) {
@@ -277,6 +294,7 @@ export function PricingBillingDialog({
         root: t("modelPricing.jsonErrors.root"),
         model: t("modelPricing.jsonErrors.model"),
         mode: t("modelPricing.jsonErrors.mode"),
+        multiplier: t("modelPricing.jsonErrors.multiplier"),
         tiered: t("modelPricing.jsonErrors.tiered"),
       });
       setJSONError("");
@@ -350,6 +368,22 @@ export function PricingBillingDialog({
                         <Switch size="sm" checked={form.isFree} onCheckedChange={(checked) => setForm({ ...form, isFree: checked })} />
                       </div>
                     </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">{t("modelPricing.pricingMultiplier")}</p>
+                    <Input
+                      value={form.pricingMultiplier}
+                      type="number"
+                      min="0.000001"
+                      max="100"
+                      step="0.000001"
+                      aria-invalid={Boolean(pricingMultiplierError)}
+                      onChange={(event) => setForm({ ...form, pricingMultiplier: event.target.value })}
+                    />
+                    <p className={pricingMultiplierError ? "text-[11px] text-destructive" : "text-[11px] text-muted-foreground"}>
+                      {pricingMultiplierError || t("modelPricing.pricingMultiplierDescription")}
+                    </p>
                   </div>
 
                   {form.pricingMode === "token" ? (
@@ -514,7 +548,7 @@ export function PricingBillingDialog({
             <Button type="button" variant="ghost" onClick={onCancel} disabled={saving}>
               {tActions("cancel")}
             </Button>
-            <Button type="submit" disabled={saving || Boolean(jsonError)}>
+            <Button type="submit" disabled={saving || Boolean(jsonError) || (editorMode === "form" && Boolean(pricingMultiplierError))}>
               {saving ? <SpinnerLabel>{tActions("saving")}</SpinnerLabel> : tActions("save")}
             </Button>
           </DialogFooter>

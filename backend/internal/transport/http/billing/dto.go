@@ -33,17 +33,18 @@ type CreateCheckoutRequest struct {
 
 // UpsertModelPricingRequest 保存模型计费单价。金额单位均为美元。
 type UpsertModelPricingRequest struct {
-	PlatformModelName       string  `json:"platformModelName" binding:"required,max=128"`
-	Currency                string  `json:"currency" binding:"omitempty,max=16"`
-	IsFree                  bool    `json:"isFree"`
-	PricingMode             string  `json:"pricingMode" binding:"omitempty,oneof=token call duration tiered"`
-	InputUSDPerMTokens      float64 `json:"inputUSDPerMTokens" binding:"min=0"`
-	CacheReadUSDPerMTokens  float64 `json:"cacheReadUSDPerMTokens" binding:"min=0"`
-	CacheWriteUSDPerMTokens float64 `json:"cacheWriteUSDPerMTokens" binding:"min=0"`
-	OutputUSDPerMTokens     float64 `json:"outputUSDPerMTokens" binding:"min=0"`
-	CallUSDPerCall          float64 `json:"callUSDPerCall" binding:"min=0"`
-	DurationUSDPerSecond    float64 `json:"durationUSDPerSecond" binding:"min=0"`
-	TieredPricingJSON       string  `json:"tieredPricingJSON" binding:"max=20000"`
+	PlatformModelName       string   `json:"platformModelName" binding:"required,max=128"`
+	Currency                string   `json:"currency" binding:"omitempty,max=16"`
+	IsFree                  bool     `json:"isFree"`
+	PricingMode             string   `json:"pricingMode" binding:"omitempty,oneof=token call duration tiered"`
+	PricingMultiplier       *float64 `json:"pricingMultiplier" binding:"omitempty,gt=0,lte=100"`
+	InputUSDPerMTokens      float64  `json:"inputUSDPerMTokens" binding:"min=0"`
+	CacheReadUSDPerMTokens  float64  `json:"cacheReadUSDPerMTokens" binding:"min=0"`
+	CacheWriteUSDPerMTokens float64  `json:"cacheWriteUSDPerMTokens" binding:"min=0"`
+	OutputUSDPerMTokens     float64  `json:"outputUSDPerMTokens" binding:"min=0"`
+	CallUSDPerCall          float64  `json:"callUSDPerCall" binding:"min=0"`
+	DurationUSDPerSecond    float64  `json:"durationUSDPerSecond" binding:"min=0"`
+	TieredPricingJSON       string   `json:"tieredPricingJSON" binding:"max=20000"`
 }
 
 // BillingConfigRequest 保存计费全局配置。
@@ -453,6 +454,7 @@ type ModelPricingResponse struct {
 	Currency                    string    `json:"currency"`
 	IsFree                      bool      `json:"isFree"`
 	PricingMode                 string    `json:"pricingMode"`
+	PricingMultiplier           float64   `json:"pricingMultiplier"`
 	InputUSDPerMTokens          float64   `json:"inputUSDPerMTokens"`
 	CacheReadUSDPerMTokens      float64   `json:"cacheReadUSDPerMTokens"`
 	CacheWriteUSDPerMTokens     float64   `json:"cacheWriteUSDPerMTokens"`
@@ -1065,6 +1067,7 @@ func toModelPricingResponse(item appbilling.ModelPricingView) ModelPricingRespon
 		Currency:                    item.Currency,
 		IsFree:                      item.IsFree,
 		PricingMode:                 item.PricingMode,
+		PricingMultiplier:           item.PricingMultiplier,
 		InputUSDPerMTokens:          nanousdToUSD(item.InputNanousdPerMTokens),
 		CacheReadUSDPerMTokens:      nanousdToUSD(item.CacheReadNanousdPerMTokens),
 		CacheWriteUSDPerMTokens:     nanousdToUSD(item.CacheWriteNanousdPerMTokens),
@@ -1089,6 +1092,7 @@ func modelPricingInputFromRequest(req UpsertModelPricingRequest) appbilling.Mode
 		Currency:                    req.Currency,
 		IsFree:                      req.IsFree,
 		PricingMode:                 req.PricingMode,
+		PricingMultiplier:           optionalPricingMultiplier(req.PricingMultiplier),
 		InputNanousdPerMTokens:      usdToNanousd(req.InputUSDPerMTokens),
 		CacheReadNanousdPerMTokens:  usdToNanousd(req.CacheReadUSDPerMTokens),
 		CacheWriteNanousdPerMTokens: usdToNanousd(req.CacheWriteUSDPerMTokens),
@@ -1130,4 +1134,11 @@ func nanousdToUSD(value int64) float64 {
 		return 0
 	}
 	return float64(value) / 1000000000
+}
+
+func optionalPricingMultiplier(value *float64) float64 {
+	if value == nil || *value <= 0 || math.IsNaN(*value) || math.IsInf(*value, 0) {
+		return 1
+	}
+	return *value
 }

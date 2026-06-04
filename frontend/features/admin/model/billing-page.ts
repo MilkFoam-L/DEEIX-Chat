@@ -29,6 +29,7 @@ export type TieredPricingTierForm = {
 export type PricingFormState = {
   platformModelName: string;
   pricingMode: PricingMode;
+  pricingMultiplier: string;
   input: string;
   cacheRead: string;
   cacheWrite: string;
@@ -52,6 +53,7 @@ export type ModelPricingExportEntry = {
   currency: string;
   isFree: boolean;
   pricingMode: PricingMode;
+  pricingMultiplier: number;
   inputUSDPerMTokens: number;
   cacheReadUSDPerMTokens: number;
   cacheWriteUSDPerMTokens: number;
@@ -75,12 +77,14 @@ export type ModelPricingImportMessages = {
   pricingObject: (model: string) => string;
   invalidPricingMode: (model: string) => string;
   invalidNumber: (model: string, field: string) => string;
+  invalidPricingMultiplier: (model: string) => string;
   invalidTieredPricing: (model: string, field: string) => string;
   invalidTieredPricingJSON: (model: string) => string;
 };
 
 export const PAGE_SIZE_OPTIONS = [25, 50, 100, 200, 500, 1000];
 export const DEFAULT_PAGE_SIZE = 25;
+export const PRICING_MULTIPLIER_MAX = 100;
 export const PAYMENT_SETTING_KEYS = [
   "usd_to_cny_rate",
   "payment_providers",
@@ -223,6 +227,7 @@ export function createFormState(row: BillingModelPricingRow): PricingFormState {
   return {
     platformModelName: row.platformModelName,
     pricingMode: normalizePricingMode(pricing?.pricingMode),
+    pricingMultiplier: String(normalizePricingMultiplier(pricing?.pricingMultiplier)),
     input: String(pricing?.inputUSDPerMTokens ?? 0),
     cacheRead: String(pricing?.cacheReadUSDPerMTokens ?? 0),
     cacheWrite: String(pricing?.cacheWriteUSDPerMTokens ?? 0),
@@ -254,6 +259,25 @@ export function parsePrice(value: string): number {
   return parsed;
 }
 
+export function normalizePricingMultiplier(value: number | null | undefined): number {
+  if (!Number.isFinite(value ?? NaN) || (value ?? 0) <= 0) {
+    return 1;
+  }
+  return value ?? 1;
+}
+
+export function parseValidPricingMultiplier(value: string): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > PRICING_MULTIPLIER_MAX) {
+    return null;
+  }
+  return parsed;
+}
+
+export function parsePricingMultiplier(value: string): number {
+  return parseValidPricingMultiplier(value) ?? 1;
+}
+
 export function normalizePricingMode(value: string | null | undefined): PricingMode {
   if (value === "call" || value === "duration" || value === "tiered") return value;
   return "token";
@@ -275,6 +299,7 @@ const DEFAULT_IMPORT_MESSAGES: ModelPricingImportMessages = {
   pricingObject: (model) => `${model} pricing must be an object`,
   invalidPricingMode: (model) => `${model}.pricingMode must be token, call, duration, or tiered`,
   invalidNumber: (model, field) => `${model}.${field} must be a number greater than or equal to 0`,
+  invalidPricingMultiplier: (model) => `${model}.pricingMultiplier must be a number greater than 0 and at most ${PRICING_MULTIPLIER_MAX}`,
   invalidTieredPricing: (model, field) => `${model}.${field} must contain a non-empty tiers array`,
   invalidTieredPricingJSON: (model) => `${model}.tieredPricingJSON is not valid JSON`,
 };
@@ -294,6 +319,24 @@ function numberFromPricingField(
   if (!Number.isFinite(parsed) || parsed < 0) {
     errors.push(messages.invalidNumber(platformModelName, key));
     return 0;
+  }
+  return parsed;
+}
+
+function pricingMultiplierFromImportField(
+  entry: Record<string, unknown>,
+  errors: string[],
+  platformModelName: string,
+  messages: ModelPricingImportMessages,
+): number {
+  const value = entry.pricingMultiplier;
+  if (value === undefined || value === null || value === "") {
+    return 1;
+  }
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > PRICING_MULTIPLIER_MAX) {
+    errors.push(messages.invalidPricingMultiplier(platformModelName));
+    return 1;
   }
   return parsed;
 }
@@ -362,6 +405,7 @@ export function buildModelPricingExportObject(pricingItems: AdminModelPricingDTO
       currency: item.currency || "USD",
       isFree: item.isFree,
       pricingMode,
+      pricingMultiplier: normalizePricingMultiplier(item.pricingMultiplier),
       inputUSDPerMTokens: pricingMode === "token" ? item.inputUSDPerMTokens : 0,
       cacheReadUSDPerMTokens: pricingMode === "token" ? item.cacheReadUSDPerMTokens : 0,
       cacheWriteUSDPerMTokens: pricingMode === "token" ? item.cacheWriteUSDPerMTokens : 0,
@@ -408,6 +452,7 @@ export function createOptimisticModelPricing(row: BillingModelPricingRow, payloa
     currency: payload.currency || row.pricing?.currency || "USD",
     isFree: payload.isFree,
     pricingMode,
+    pricingMultiplier: normalizePricingMultiplier(payload.pricingMultiplier),
     inputUSDPerMTokens,
     cacheReadUSDPerMTokens,
     cacheWriteUSDPerMTokens,
@@ -489,6 +534,7 @@ export function parseModelPricingImportJSON(
       currency: typeof rawEntry.currency === "string" && rawEntry.currency.trim() ? rawEntry.currency.trim() : "USD",
       isFree: typeof rawEntry.isFree === "boolean" ? rawEntry.isFree : false,
       pricingMode,
+      pricingMultiplier: pricingMultiplierFromImportField(rawEntry, entryErrors, platformModelName, messages),
       inputUSDPerMTokens: pricingMode === "token" ? numberFromPricingField(rawEntry, "inputUSDPerMTokens", entryErrors, platformModelName, messages) : 0,
       cacheReadUSDPerMTokens: pricingMode === "token" ? numberFromPricingField(rawEntry, "cacheReadUSDPerMTokens", entryErrors, platformModelName, messages) : 0,
       cacheWriteUSDPerMTokens: pricingMode === "token" ? numberFromPricingField(rawEntry, "cacheWriteUSDPerMTokens", entryErrors, platformModelName, messages) : 0,

@@ -10,6 +10,7 @@ export type LoginSettingsField = {
   key:
     | "login_page_title"
     | "login_default_next_path"
+    | "logo_url"
     | "username_login_enabled"
     | "email_login_enabled"
     | "third_party_login_enabled"
@@ -60,6 +61,7 @@ export function buildLoginSettingsGroups(t: LoginSettingsTranslator): LoginSetti
     fields: [
       { namespace: "auth", key: "login_page_title", label: t("fields.loginPageTitle.label"), description: t("fields.loginPageTitle.description"), type: "string", placeholder: t("fields.loginPageTitle.placeholder") },
       { namespace: "auth", key: "login_default_next_path", label: t("fields.loginDefaultNextPath.label"), description: t("fields.loginDefaultNextPath.description"), type: "string", placeholder: "/chat" },
+      { namespace: "auth", key: "logo_url", label: t("fields.logoURL.label"), description: t("fields.logoURL.description"), type: "string", placeholder: "https://example.com/logo.svg" },
     ],
   },
   {
@@ -281,6 +283,7 @@ export function applyLoginDefaults(settings: Record<string, string>): Record<str
     ...settings,
     "auth.login_page_title": settings["auth.login_page_title"]?.trim() || "Sign in to DEEIX Chat",
     "auth.login_default_next_path": settings["auth.login_default_next_path"]?.trim() || "/chat",
+    "auth.logo_url": settings["auth.logo_url"]?.trim() ?? "",
     "auth.username_login_enabled": settings["auth.username_login_enabled"] || "true",
     "auth.email_login_enabled": settings["auth.email_login_enabled"] || "true",
     "auth.third_party_login_enabled": settings["auth.third_party_login_enabled"] || "true",

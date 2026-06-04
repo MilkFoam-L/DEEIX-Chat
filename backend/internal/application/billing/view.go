@@ -72,6 +72,7 @@ type PublicModelPricing struct {
 	Currency                string
 	IsFree                  bool
 	Mode                    string
+	PricingMultiplier       float64
 	InputUSDPerMTokens      float64
 	CacheReadUSDPerMTokens  float64
 	CacheWriteUSDPerMTokens float64

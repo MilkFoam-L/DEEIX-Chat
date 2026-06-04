@@ -31,6 +31,10 @@
       "label": "Default redirect path",
       "description": "Default destination after sign-in when /login has no next parameter."
     },
+    "logoURL": {
+      "label": "Logo URL",
+      "description": "Replace the site logo shown in the user interface. Supports https://, http://, or absolute local paths starting with /. Leave empty to use the default logo."
+    },
     "emailLoginEnabled": {
       "label": "Email login",
       "description": "Allow users to sign in with email and password."

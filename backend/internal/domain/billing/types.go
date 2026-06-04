@@ -228,6 +228,7 @@ type ModelPricing struct {
 	Currency                    string
 	IsFree                      bool
 	PricingMode                 string
+	PricingMultiplier           float64
 	InputNanousdPerMTokens      int64
 	CacheReadNanousdPerMTokens  int64
 	CacheWriteNanousdPerMTokens int64
@@ -286,6 +287,7 @@ type UsageServiceItem struct {
 	FastMode                      bool
 	RateMultiplier                float64
 	PricingMode                   string
+	PricingMultiplier             float64
 	InputTokens                   int64
 	CacheReadTokens               int64
 	CacheWriteTokens              int64

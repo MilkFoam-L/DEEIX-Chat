@@ -19,6 +19,7 @@ import {
   formatAmountCents,
   formatCreditUSD,
   formatUSD,
+  normalizePricingMultiplier,
   normalizePricingMode,
 } from "@/features/admin/model/billing-page";
 
@@ -106,6 +107,18 @@ function PricingCell({ value, suffix }: { value: number; suffix: string }) {
       <span className="ml-1 text-xs text-muted-foreground">{suffix}</span>
     </span>
   );
+}
+
+function formatPricingMultiplier(value: number): string {
+  return normalizePricingMultiplier(value).toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 6,
+  });
+}
+
+export function PricingMultiplierCell({ pricing }: { pricing: AdminModelPricingDTO | null }) {
+  if (!pricing) return <span className="text-muted-foreground">-</span>;
+  return <span className="text-xs tabular-nums text-foreground">×{formatPricingMultiplier(pricing.pricingMultiplier)}</span>;
 }
 
 export function PricingUnitCell({ pricing }: { pricing: AdminModelPricingDTO | null }) {

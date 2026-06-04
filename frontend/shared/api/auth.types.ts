@@ -95,6 +95,7 @@ export type PasswordChangeVerificationStartData = {
 export type LoginPageSettings = {
   title: string;
   defaultNextPath: string;
+  logoURL: string;
 };
 
 export type IdentityProviderDTO = {

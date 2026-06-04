@@ -31,6 +31,10 @@
       "label": "默认跳转路径",
       "description": "访问 /login 且没有 next 参数时，登录成功后的默认跳转路径。"
     },
+    "logoURL": {
+      "label": "Logo URL",
+      "description": "替换用户端显示的站点 Logo。支持 https://、http:// 或 / 开头的站内路径；留空使用默认 Logo。"
+    },
     "emailLoginEnabled": {
       "label": "邮箱登录",
       "description": "允许用户使用邮箱和密码登录。"

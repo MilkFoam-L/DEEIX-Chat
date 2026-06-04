@@ -160,6 +160,8 @@
     "platformModel": "Platform model",
     "free": "Free",
     "pricingMode": "Pricing mode",
+    "pricingMultiplier": "Pricing multiplier",
+    "pricingMultiplierDescription": "Actual billing, snapshots, and public display multiply base prices by this value. Use 1 for original price.",
     "basePrice": "Base price",
     "updatedAt": "Updated at",
     "empty": "No model pricing settings",
@@ -174,6 +176,7 @@
       "root": "Model pricing JSON must be an object.",
       "model": "Platform model name cannot be changed from JSON.",
       "mode": "pricingMode must be token, call, duration, or tiered.",
+      "multiplier": "pricingMultiplier must be a number greater than 0 and at most 100.",
       "tiered": "Tiered pricing requires a non-empty tieredPricing.tiers array."
     },
     "freeModel": "Free model",
@@ -265,6 +268,8 @@
     "nativeToolBillingSaveFailed": "Failed to save native tool billing",
     "pricingSaved": "Model pricing saved",
     "pricingSaveFailed": "Could not save model pricing",
+    "pricingMultiplierInvalid": "Invalid pricing multiplier",
+    "pricingMultiplierInvalidDescription": "Enter a number greater than 0 and at most 100.",
     "exportEmpty": "No model pricing to export",
     "exported": "Exported {count} model pricing entries",
     "importUnknownModels": "Import failed: unknown platform models",
@@ -318,6 +323,7 @@
     "pricingObject": "{model} pricing must be an object",
     "invalidPricingMode": "{model}.pricingMode must be token, call, duration, or tiered",
     "invalidNumber": "{model}.{field} must be a number greater than or equal to 0",
+    "invalidPricingMultiplier": "{model}.pricingMultiplier must be a number greater than 0 and at most 100",
     "invalidTieredPricing": "{model}.{field} must contain a non-empty tiers array",
     "invalidTieredPricingJSON": "{model}.tieredPricingJSON is not valid JSON"
   }

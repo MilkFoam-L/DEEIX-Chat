@@ -9,7 +9,8 @@ import (
 )
 
 type testSettingsRepo struct {
-	byNamespace map[string][]domainsettings.SystemSetting
+	byNamespace             map[string][]domainsettings.SystemSetting
+	upsertedWithDescription []domainsettings.SystemSetting
 }
 
 func (r *testSettingsRepo) ListAll(ctx context.Context) ([]domainsettings.SystemSetting, error) {
@@ -29,11 +30,47 @@ func (r *testSettingsRepo) Upsert(ctx context.Context, items []domainsettings.Sy
 }
 
 func (r *testSettingsRepo) UpsertWithDescription(ctx context.Context, items []domainsettings.SystemSetting) error {
+	r.upsertedWithDescription = append([]domainsettings.SystemSetting(nil), items...)
 	return nil
 }
 
 func (r *testSettingsRepo) Delete(ctx context.Context, namespace, key string) error {
 	return nil
+}
+
+func TestSeedIncludesCustomLogoURLSetting(t *testing.T) {
+	repo := &testSettingsRepo{byNamespace: map[string][]domainsettings.SystemSetting{}}
+	service := NewService(repo, "test-data-encryption-key")
+
+	if err := service.Seed(context.Background(), config.Config{}); err != nil {
+		t.Fatalf("expected seed to pass, got %v", err)
+	}
+
+	for _, item := range repo.upsertedWithDescription {
+		if item.Namespace == "auth" && item.Key == "logo_url" {
+			if item.Value != "" || item.ValueType != "string" {
+				t.Fatalf("unexpected logo_url seed: %#v", item)
+			}
+			return
+		}
+	}
+	t.Fatal("expected auth.logo_url to be seeded")
+}
+
+func TestValidateLogoURLSetting(t *testing.T) {
+	valid := []string{"", "/logo.svg", "/assets/logo.png", "https://example.com/logo.svg", "http://example.com/logo.png"}
+	for _, value := range valid {
+		if err := validatePatchItem(PatchItem{Namespace: "auth", Key: "logo_url", Value: value}); err != nil {
+			t.Fatalf("expected logo_url %q to pass, got %v", value, err)
+		}
+	}
+
+	invalid := []string{"logo.svg", "//example.com/logo.svg", "ftp://example.com/logo.svg"}
+	for _, value := range invalid {
+		if err := validatePatchItem(PatchItem{Namespace: "auth", Key: "logo_url", Value: value}); err == nil {
+			t.Fatalf("expected logo_url %q to fail", value)
+		}
+	}
 }
 
 func TestApplyEmbeddingDependentCascadesDisablesRAGAndSemanticFeatures(t *testing.T) {

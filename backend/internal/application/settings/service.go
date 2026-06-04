@@ -245,6 +245,8 @@ func validatePatchItem(item PatchItem) error {
 		return validateOptionalHTTPURL(value, key)
 	case "auth:login_page_title":
 		return validateStringMax(value, 80, key)
+	case "auth:logo_url":
+		return validateOptionalLogoURL(value, key)
 	case "chat:model_option_policy_mode":
 		switch value {
 		case "allowlist", "denylist", "disabled":
@@ -890,6 +892,23 @@ func validateOptionalHTTPURL(value string, key string) error {
 		return fmt.Errorf("%s must start with http:// or https://", key)
 	}
 	return nil
+}
+
+func validateOptionalLogoURL(value string, key string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if err := validateStringMax(value, 2048, key); err != nil {
+		return err
+	}
+	if strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//") {
+		return nil
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return nil
+	}
+	return fmt.Errorf("%s must be an http(s) URL or absolute path", key)
 }
 
 func validateEmailDomainList(value string, key string) error {

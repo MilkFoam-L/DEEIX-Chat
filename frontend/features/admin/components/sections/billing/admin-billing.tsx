@@ -34,7 +34,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { AdminDateTimePicker, adminDateTimeFormValue, adminDateTimeValueToISOString } from "@/features/admin/components/admin-date-time-picker";
 import { AdminBulkConfirmDialog } from "@/features/admin/components/bulk-confirm-dialog";
 import { PlanBillingDialog, PricingBillingDialog } from "@/features/admin/components/sections/billing/billing-dialogs";
-import { PeriodBillingTable, PricingUnitCell } from "@/features/admin/components/sections/billing/billing-tables";
+import { PeriodBillingTable, PricingMultiplierCell, PricingUnitCell } from "@/features/admin/components/sections/billing/billing-tables";
 import {
   Table,
   TableBody,
@@ -87,11 +87,13 @@ import {
   formatDateTime,
   mergeModelPricingItem,
   normalizePaymentProviders,
+  normalizePricingMultiplier,
   normalizePricingMode,
   parseModelPricingImportJSON,
   parseEPayTypesJSON,
   parseIntValue,
   parsePrice,
+  parseValidPricingMultiplier,
   paymentPatchItems,
   paymentProviderSetting,
   paymentSettingsChanged,
@@ -1188,6 +1190,11 @@ export function AdminBillingPage() {
   async function savePricing(event?: React.FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     if (!form) return;
+    const pricingMultiplier = parseValidPricingMultiplier(form.pricingMultiplier);
+    if (pricingMultiplier === null) {
+      toast.error(t("toast.pricingMultiplierInvalid"), { description: t("toast.pricingMultiplierInvalidDescription") });
+      return;
+    }
     setSaving(true);
     try {
       const token = await resolveAccessToken();
@@ -1199,6 +1206,7 @@ export function AdminBillingPage() {
         platformModelName: form.platformModelName,
         currency: "USD",
         pricingMode: form.pricingMode,
+        pricingMultiplier,
         inputUSDPerMTokens: form.pricingMode === "token" ? parsePrice(form.input) : 0,
         cacheReadUSDPerMTokens: form.pricingMode === "token" ? parsePrice(form.cacheRead) : 0,
         cacheWriteUSDPerMTokens: form.pricingMode === "token" ? parsePrice(form.cacheWrite) : 0,
@@ -1251,6 +1259,7 @@ export function AdminBillingPage() {
         pricingObject: (model) => t("importErrors.pricingObject", { model }),
         invalidPricingMode: (model) => t("importErrors.invalidPricingMode", { model }),
         invalidNumber: (model, field) => t("importErrors.invalidNumber", { model, field }),
+        invalidPricingMultiplier: (model) => t("importErrors.invalidPricingMultiplier", { model }),
         invalidTieredPricing: (model, field) => t("importErrors.invalidTieredPricing", { model, field }),
         invalidTieredPricingJSON: (model) => t("importErrors.invalidTieredPricingJSON", { model }),
       });
@@ -1308,6 +1317,7 @@ export function AdminBillingPage() {
         platformModelName: row.platformModelName,
         currency: row.pricing?.currency || "USD",
         pricingMode,
+        pricingMultiplier: normalizePricingMultiplier(row.pricing?.pricingMultiplier),
         inputUSDPerMTokens: pricingMode === "token" ? row.pricing?.inputUSDPerMTokens ?? 0 : 0,
         cacheReadUSDPerMTokens: pricingMode === "token" ? row.pricing?.cacheReadUSDPerMTokens ?? 0 : 0,
         cacheWriteUSDPerMTokens: pricingMode === "token" ? row.pricing?.cacheWriteUSDPerMTokens ?? 0 : 0,
@@ -1962,14 +1972,15 @@ export function AdminBillingPage() {
                 <TableHead className="min-w-[210px]">{t("modelPricing.platformModel")}</TableHead>
                 <TableHead>{t("modelPricing.free")}</TableHead>
                 <TableHead>{t("modelPricing.pricingMode")}</TableHead>
+                <TableHead>{t("modelPricing.pricingMultiplier")}</TableHead>
                 <TableHead className="min-w-[260px]">{t("modelPricing.basePrice")}</TableHead>
                 <TableHead>{t("modelPricing.updatedAt")}</TableHead>
                 <TableHead stickyEnd className="w-[56px]" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading ? <TableSkeletonRows colSpan={6} rowCount={10} /> : null}
-              {!loading && pageRows.length === 0 ? <TableEmptyRow colSpan={6}>{t("modelPricing.empty")}</TableEmptyRow> : null}
+              {loading ? <TableSkeletonRows colSpan={7} rowCount={10} /> : null}
+              {!loading && pageRows.length === 0 ? <TableEmptyRow colSpan={7}>{t("modelPricing.empty")}</TableEmptyRow> : null}
               {!loading
                 ? pageRows.map((row) => {
                     const identity = resolveModelIdentity({
@@ -2004,6 +2015,9 @@ export function AdminBillingPage() {
                         </TableCell>
                         <TableCell className="py-1.5">
                           {row.pricing ? t(`pricingModes.${normalizePricingMode(row.pricing.pricingMode)}`) : <span className="text-muted-foreground">-</span>}
+                        </TableCell>
+                        <TableCell className="py-1.5">
+                          <PricingMultiplierCell pricing={row.pricing} />
                         </TableCell>
                         <TableCell className="py-1.5">
                           <PricingUnitCell pricing={row.pricing} />

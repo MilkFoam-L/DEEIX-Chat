@@ -11,6 +11,7 @@ export type PublicModelPricingDTO = {
   currency: string;
   isFree: boolean;
   mode: "token" | "call" | "duration" | "tiered" | string;
+  pricingMultiplier: number;
   inputUSDPerMTokens: number;
   cacheReadUSDPerMTokens: number;
   cacheWriteUSDPerMTokens: number;

@@ -25,6 +25,7 @@ func defaultSettings() []domainsettings.SystemSetting {
 		{Namespace: "auth", Key: "public_auth_rate_limit_rpm", Value: "30", ValueType: "int", Description: "公开鉴权接口限流 RPM"},
 		{Namespace: "auth", Key: "login_page_title", Value: defaultLoginPageTitle, ValueType: "string", Description: "登录页面标题"},
 		{Namespace: "auth", Key: "login_default_next_path", Value: "/chat", ValueType: "string", Description: "无 next 参数时登录成功后的默认跳转路径"},
+		{Namespace: "auth", Key: "logo_url", Value: "", ValueType: "string", Description: "站点 Logo URL，留空使用默认 Logo"},
 		{Namespace: "auth", Key: "username_login_enabled", Value: "true", ValueType: "bool", Description: "是否允许用户名密码登录"},
 		{Namespace: "auth", Key: "email_login_enabled", Value: "true", ValueType: "bool", Description: "是否允许邮箱登录"},
 		{Namespace: "auth", Key: "third_party_login_enabled", Value: "true", ValueType: "bool", Description: "是否启用第三方登录入口"},

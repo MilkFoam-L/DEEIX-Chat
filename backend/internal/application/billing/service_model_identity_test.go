@@ -302,6 +302,154 @@ func TestBuildUsageLedgerSnapshotsModelIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildUsageLedgerAppliesPricingMultiplier(t *testing.T) {
+	repo := &billingRepositoryStub{
+		mode: "usage",
+		pricing: &domainbilling.ModelPricing{
+			PlatformModelName:          "gpt-5.5",
+			Currency:                   "USD",
+			PricingMode:                domainbilling.PricingModeToken,
+			PricingMultiplier:          0.1,
+			InputNanousdPerMTokens:     1_000_000_000,
+			OutputNanousdPerMTokens:    2_000_000_000,
+			CacheReadNanousdPerMTokens: 200_000_000,
+		},
+	}
+	service := NewService(repo)
+
+	ledger, err := service.BuildUsageLedger(context.Background(), UsagePricingInput{
+		UserID:            1,
+		PlatformModelName: "gpt-5.5",
+		InputTokens:       1_000_000,
+		OutputTokens:      1_000_000,
+	})
+	if err != nil {
+		t.Fatalf("build usage ledger: %v", err)
+	}
+	if ledger.BilledNanousd != 300_000_000 {
+		t.Fatalf("billed nanousd = %d, want 300000000", ledger.BilledNanousd)
+	}
+
+	var snapshot map[string]interface{}
+	if err := json.Unmarshal([]byte(ledger.PricingSnapshotJSON), &snapshot); err != nil {
+		t.Fatalf("unmarshal pricing snapshot: %v", err)
+	}
+	if snapshot["pricing_multiplier"] != 0.1 {
+		t.Fatalf("pricing multiplier snapshot = %#v, want 0.1", snapshot["pricing_multiplier"])
+	}
+	if snapshot["input_nanousd_per_m_tokens"] != float64(100_000_000) {
+		t.Fatalf("effective input rate = %#v, want 100000000", snapshot["input_nanousd_per_m_tokens"])
+	}
+	if snapshot["base_input_nanousd_per_m_tokens"] != float64(1_000_000_000) {
+		t.Fatalf("base input rate = %#v, want 1000000000", snapshot["base_input_nanousd_per_m_tokens"])
+	}
+}
+
+func TestBuildUsageLedgerAppliesPricingMultiplierToServiceItems(t *testing.T) {
+	repo := &billingRepositoryStub{
+		mode: "usage",
+		pricing: &domainbilling.ModelPricing{
+			PlatformModelName:       "gpt-5.5",
+			Currency:                "USD",
+			PricingMode:             domainbilling.PricingModeToken,
+			PricingMultiplier:       0.1,
+			InputNanousdPerMTokens:  1_000_000_000,
+			OutputNanousdPerMTokens: 2_000_000_000,
+		},
+	}
+	service := NewService(repo)
+
+	ledger, err := service.BuildUsageLedger(context.Background(), UsagePricingInput{
+		UserID:      1,
+		ServiceOnly: true,
+		ServiceItems: []ServiceUsageInput{{
+			ServiceCode:       "context",
+			PlatformModelName: "gpt-5.5",
+			InputTokens:       1_000_000,
+			OutputTokens:      1_000_000,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build usage ledger: %v", err)
+	}
+	if ledger.BilledNanousd != 300_000_000 {
+		t.Fatalf("billed nanousd = %d, want 300000000", ledger.BilledNanousd)
+	}
+
+	var snapshot map[string]interface{}
+	if err := json.Unmarshal([]byte(ledger.PricingSnapshotJSON), &snapshot); err != nil {
+		t.Fatalf("unmarshal pricing snapshot: %v", err)
+	}
+	serviceItems, ok := snapshot["service_items"].([]interface{})
+	if !ok || len(serviceItems) != 1 {
+		t.Fatalf("expected one service item snapshot, got %#v", snapshot["service_items"])
+	}
+	item, ok := serviceItems[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected service item map, got %#v", serviceItems[0])
+	}
+	if item["pricing_multiplier"] != 0.1 {
+		t.Fatalf("service pricing multiplier snapshot = %#v, want 0.1", item["pricing_multiplier"])
+	}
+	if item["input_nanousd_per_m_tokens"] != float64(100_000_000) {
+		t.Fatalf("service effective input rate = %#v, want 100000000", item["input_nanousd_per_m_tokens"])
+	}
+}
+
+func TestUpsertModelPricingDefaultsPricingMultiplier(t *testing.T) {
+	repo := &billingRepositoryStub{}
+	service := NewService(repo)
+
+	view, err := service.UpsertModelPricing(context.Background(), ModelPricingInput{
+		PlatformModelName:       "gpt-5.5",
+		PricingMode:             domainbilling.PricingModeToken,
+		InputNanousdPerMTokens:  1_000_000_000,
+		OutputNanousdPerMTokens: 2_000_000_000,
+	})
+	if err != nil {
+		t.Fatalf("upsert model pricing: %v", err)
+	}
+	if view.PricingMultiplier != 1 {
+		t.Fatalf("pricing multiplier = %v, want 1", view.PricingMultiplier)
+	}
+}
+
+func TestListPublicModelPricingAppliesPricingMultiplier(t *testing.T) {
+	repo := &billingRepositoryStub{
+		listPricing: []domainbilling.ModelPricing{{
+			PlatformModelName:          "gpt-5.5",
+			Currency:                   "USD",
+			PricingMode:                domainbilling.PricingModeToken,
+			PricingMultiplier:          0.1,
+			InputNanousdPerMTokens:     1_000_000_000,
+			CacheReadNanousdPerMTokens: 200_000_000,
+			OutputNanousdPerMTokens:    2_000_000_000,
+		}},
+	}
+	service := NewService(repo)
+
+	items, err := service.ListPublicModelPricing(context.Background())
+	if err != nil {
+		t.Fatalf("list public model pricing: %v", err)
+	}
+	pricing, ok := items["gpt-5.5"]
+	if !ok {
+		t.Fatalf("missing public pricing for gpt-5.5: %#v", items)
+	}
+	if pricing.PricingMultiplier != 0.1 {
+		t.Fatalf("public pricing multiplier = %v, want 0.1", pricing.PricingMultiplier)
+	}
+	if pricing.InputUSDPerMTokens != 0.1 {
+		t.Fatalf("public input price = %v, want 0.1", pricing.InputUSDPerMTokens)
+	}
+	if pricing.CacheReadUSDPerMTokens != 0.02 {
+		t.Fatalf("public cache read price = %v, want 0.02", pricing.CacheReadUSDPerMTokens)
+	}
+	if pricing.OutputUSDPerMTokens != 0.2 {
+		t.Fatalf("public output price = %v, want 0.2", pricing.OutputUSDPerMTokens)
+	}
+}
+
 func TestBuildUsageLedgerBillsNativeToolDefaultsWhenEnabled(t *testing.T) {
 	repo := &billingRepositoryStub{
 		mode:                     "usage",

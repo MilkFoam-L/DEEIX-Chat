@@ -160,6 +160,8 @@
     "platformModel": "平台模型",
     "free": "免费",
     "pricingMode": "计费模式",
+    "pricingMultiplier": "定价倍率",
+    "pricingMultiplierDescription": "实际扣费、快照和公开展示会按基础单价乘以该倍率；1 表示原价。",
     "basePrice": "基础单价",
     "updatedAt": "更新时间",
     "empty": "暂无模型定价配置",
@@ -174,6 +176,7 @@
       "root": "模型定价 JSON 必须是对象。",
       "model": "不能通过 JSON 修改平台模型名。",
       "mode": "pricingMode 必须是 token、call、duration 或 tiered。",
+      "multiplier": "pricingMultiplier 必须是大于 0 且不超过 100 的数字。",
       "tiered": "阶梯计费需要包含非空 tieredPricing.tiers。"
     },
     "freeModel": "免费模型",
@@ -265,6 +268,8 @@
     "nativeToolBillingSaveFailed": "原生工具计费保存失败",
     "pricingSaved": "模型基础价格已保存",
     "pricingSaveFailed": "保存模型基础价格失败",
+    "pricingMultiplierInvalid": "定价倍率不合法",
+    "pricingMultiplierInvalidDescription": "请输入大于 0 且不超过 100 的数字。",
     "exportEmpty": "暂无可导出的模型定价",
     "exported": "已导出 {count} 个模型定价",
     "importUnknownModels": "导入失败：存在未知平台模型",
@@ -318,6 +323,7 @@
     "pricingObject": "{model} 的定价配置必须是对象",
     "invalidPricingMode": "{model}.pricingMode 必须是 token、call、duration 或 tiered",
     "invalidNumber": "{model}.{field} 必须是大于等于 0 的数字",
+    "invalidPricingMultiplier": "{model}.pricingMultiplier 必须是大于 0 且不超过 100 的数字",
     "invalidTieredPricing": "{model}.{field} 需要包含非空 tiers 数组",
     "invalidTieredPricingJSON": "{model}.tieredPricingJSON 不是合法 JSON"
   }

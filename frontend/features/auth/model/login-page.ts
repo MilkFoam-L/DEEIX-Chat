@@ -7,6 +7,7 @@ export type ProviderAuthIntent = "login" | "register";
 export const DEFAULT_LOGIN_SETTINGS: LoginPageSettings = {
   title: "Sign in to DEEIX Chat",
   defaultNextPath: "/chat",
+  logoURL: "",
 };
 
 export const DEFAULT_LOGIN_OPTIONS: LoginOptionsData = {

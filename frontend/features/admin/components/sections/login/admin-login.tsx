@@ -33,6 +33,7 @@ import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
 import { configuredSettingsMap } from "@/shared/lib/settings-meta";
 import type { IdentityProviderDTO } from "@/shared/api/auth.types";
 import type { PatchSettingItem } from "@/shared/api/settings.types";
+import { APP_LOGO_SETTINGS_CHANGED_EVENT } from "@/shared/components/app-logo";
 import { IdentityProviderIcon } from "@/shared/components/identity-provider-icon";
 import {
   SettingsFieldInset,
@@ -214,6 +215,7 @@ export function AdminLoginSettingsPage() {
         .map((field) => ({ namespace: field.namespace, key: field.key, value: nextSettingsMap[fieldID(field)] ?? "" }))
         .filter((item) => item.value !== (savedMap[`${item.namespace}.${item.key}`] ?? ""));
       if (items.length === 0) return;
+      const logoURLChanged = items.some((item) => item.namespace === "auth" && item.key === "logo_url");
       setSaving(true);
       try {
         const token = await resolveAccessToken();
@@ -226,6 +228,9 @@ export function AdminLoginSettingsPage() {
         setConfiguredMap(configuredSettingsMap(grouped));
         setSettingsMap(flattened);
         setSavedMap(flattened);
+        if (logoURLChanged) {
+          window.dispatchEvent(new Event(APP_LOGO_SETTINGS_CHANGED_EVENT));
+        }
         toast.success(t("toast.settingsUpdated"));
       } catch (error) {
         toast.error(t("toast.saveFailed"), { description: resolveErrorMessage(error) });

@@ -32,6 +32,7 @@ export type AdminModelPricingDTO = {
   currency: string;
   isFree: boolean;
   pricingMode: "token" | "call" | "duration" | "tiered" | string;
+  pricingMultiplier: number;
   inputUSDPerMTokens: number;
   cacheReadUSDPerMTokens: number;
   cacheWriteUSDPerMTokens: number;
@@ -54,6 +55,7 @@ export type UpsertAdminModelPricingRequest = {
   currency?: string;
   isFree: boolean;
   pricingMode: "token" | "call" | "duration" | "tiered" | string;
+  pricingMultiplier: number;
   inputUSDPerMTokens: number;
   cacheReadUSDPerMTokens: number;
   cacheWriteUSDPerMTokens: number;

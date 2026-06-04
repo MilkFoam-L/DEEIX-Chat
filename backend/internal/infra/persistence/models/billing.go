@@ -179,17 +179,18 @@ func (Redemption) TableName() string {
 // ModelPricing 定义平台模型名对应的统一计费单价。
 type ModelPricing struct {
 	BaseModel
-	PlatformModelName           string `gorm:"size:128;not null;uniqueIndex:idx_billing_model_prices_name;comment:平台模型名计费key"`
-	Currency                    string `gorm:"size:16;not null;default:'USD';comment:计费币种"`
-	IsFree                      bool   `gorm:"not null;default:false;index:idx_billing_model_prices_is_free;comment:是否免费模型"`
-	PricingMode                 string `gorm:"size:16;not null;default:'token';comment:计费模式(token/call/duration/tiered)"`
-	InputNanousdPerMTokens      int64  `gorm:"not null;default:0;comment:输入token单价(每百万token,纳美元)"`
-	CacheReadNanousdPerMTokens  int64  `gorm:"not null;default:0;comment:缓存读取token单价(每百万token,纳美元)"`
-	CacheWriteNanousdPerMTokens int64  `gorm:"not null;default:0;comment:缓存写入token单价(每百万token,纳美元)"`
-	OutputNanousdPerMTokens     int64  `gorm:"not null;default:0;comment:输出token单价(每百万token,纳美元)"`
-	CallNanousdPerCall          int64  `gorm:"not null;default:0;comment:按次单价(每次,纳美元)"`
-	DurationNanousdPerSecond    int64  `gorm:"not null;default:0;comment:按秒单价(每秒,纳美元)"`
-	TieredPricingJSON           string `gorm:"type:text;not null;default:'{}';comment:阶梯计费配置JSON"`
+	PlatformModelName           string  `gorm:"size:128;not null;uniqueIndex:idx_billing_model_prices_name;comment:平台模型名计费key"`
+	Currency                    string  `gorm:"size:16;not null;default:'USD';comment:计费币种"`
+	IsFree                      bool    `gorm:"not null;default:false;index:idx_billing_model_prices_is_free;comment:是否免费模型"`
+	PricingMode                 string  `gorm:"size:16;not null;default:'token';comment:计费模式(token/call/duration/tiered)"`
+	PricingMultiplier           float64 `gorm:"not null;default:1;comment:模型计费倍率，1表示不折扣"`
+	InputNanousdPerMTokens      int64   `gorm:"not null;default:0;comment:输入token单价(每百万token,纳美元)"`
+	CacheReadNanousdPerMTokens  int64   `gorm:"not null;default:0;comment:缓存读取token单价(每百万token,纳美元)"`
+	CacheWriteNanousdPerMTokens int64   `gorm:"not null;default:0;comment:缓存写入token单价(每百万token,纳美元)"`
+	OutputNanousdPerMTokens     int64   `gorm:"not null;default:0;comment:输出token单价(每百万token,纳美元)"`
+	CallNanousdPerCall          int64   `gorm:"not null;default:0;comment:按次单价(每次,纳美元)"`
+	DurationNanousdPerSecond    int64   `gorm:"not null;default:0;comment:按秒单价(每秒,纳美元)"`
+	TieredPricingJSON           string  `gorm:"type:text;not null;default:'{}';comment:阶梯计费配置JSON"`
 }
 
 // TableName 指定表名。

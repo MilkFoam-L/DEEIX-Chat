@@ -1289,6 +1289,7 @@ func (r *Repo) UpsertModelPricing(ctx context.Context, item *domainbilling.Model
 		"currency":                         normalizeCurrency(item.Currency),
 		"is_free":                          item.IsFree,
 		"pricing_mode":                     normalizePricingMode(item.PricingMode),
+		"pricing_multiplier":               normalizeStoredPricingMultiplier(item.PricingMultiplier),
 		"input_nanousd_per_m_tokens":       clampNonNegative(item.InputNanousdPerMTokens),
 		"cache_read_nanousd_per_m_tokens":  clampNonNegative(item.CacheReadNanousdPerMTokens),
 		"cache_write_nanousd_per_m_tokens": clampNonNegative(item.CacheWriteNanousdPerMTokens),
@@ -1629,6 +1630,7 @@ func toDomainModelPricing(item model.ModelPricing) domainbilling.ModelPricing {
 		Currency:                    item.Currency,
 		IsFree:                      item.IsFree,
 		PricingMode:                 normalizePricingMode(item.PricingMode),
+		PricingMultiplier:           normalizeStoredPricingMultiplier(item.PricingMultiplier),
 		InputNanousdPerMTokens:      item.InputNanousdPerMTokens,
 		CacheReadNanousdPerMTokens:  item.CacheReadNanousdPerMTokens,
 		CacheWriteNanousdPerMTokens: item.CacheWriteNanousdPerMTokens,
@@ -2492,6 +2494,13 @@ func normalizePricingMode(value string) string {
 	default:
 		return domainbilling.PricingModeToken
 	}
+}
+
+func normalizeStoredPricingMultiplier(value float64) float64 {
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 1
+	}
+	return value
 }
 
 func clampNonNegative(value int64) int64 {
