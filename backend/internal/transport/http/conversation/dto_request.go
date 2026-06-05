@@ -88,6 +88,7 @@ type SendMessageRequest struct {
 	FileIDs                 []string               `json:"fileIDs" binding:"max=20"`
 	SelectedToolIDs         []uint                 `json:"selectedToolIDs" binding:"max=128"`
 	HTMLVisualPromptEnabled bool                   `json:"htmlVisualPrompt"`
+	HTMLVisualColorMode     string                 `json:"htmlVisualColorMode" binding:"omitempty,oneof=light dark"`
 	ParentMessagePublicID   string                 `json:"parentMessagePublicID" binding:"omitempty,max=32"`
 	SourceMessagePublicID   string                 `json:"sourceMessagePublicID" binding:"omitempty,max=32"`
 	BranchReason            string                 `json:"branchReason" binding:"omitempty,oneof=default retry edit"`
@@ -109,4 +110,9 @@ type MediaImageRequest struct {
 // SetMessageFeedbackRequest 设置消息反馈请求。
 type SetMessageFeedbackRequest struct {
 	Feedback string `json:"feedback" binding:"omitempty,oneof=up down"`
+}
+
+// UpdateMessageRequest 更新消息内容请求。
+type UpdateMessageRequest struct {
+	Content string `json:"content" binding:"required,max=200000"`
 }

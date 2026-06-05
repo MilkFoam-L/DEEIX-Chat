@@ -25,7 +25,7 @@
   "payment": {
     "title": "支付配置",
     "usdToCnyRate": "USD -> CNY 汇率",
-    "usdToCnyRateDescription": "套餐美元基准价换算为人民币支付金额时使用。",
+    "usdToCnyRateDescription": "将美元基准价换算为人民币支付金额时使用。",
     "channels": "支付渠道",
     "channelsDescription": "Stripe 和易支付可以同时启用，用户支付时选择本次渠道。",
     "enableStripe": "启用 Stripe",
@@ -207,9 +207,11 @@
     "title": "工具定价",
     "nativeToolBilling": "原生工具计费",
     "nativeToolBillingDescription": "开启后，管理员启用的官方原生工具会按下方价格计入账单；自用模式仍只记录用量。",
+    "nativeToolCount": "当前展示 {count} 个官方原生工具。",
     "defaultPriceDescription": "所有官方原生工具均按次配置价格；填 0 表示不单独计费。工具返回内容产生的模型 token 仍按模型定价计算。",
     "provider": "厂商",
     "tool": "工具",
+    "type": "类型",
     "price": "价格",
     "note": "原生工具价格由管理员统一配置为每次调用价格；未被上游返回调用次数的工具不会生成单独工具账单项。",
     "prices": {
@@ -219,24 +221,6 @@
     "units": {
       "call": "次",
       "search": "次搜索"
-    },
-    "tools": {
-      "openaiWebSearchReasoning": "网页搜索（推理模型）",
-      "openaiWebSearchStandard": "网页搜索（非推理模型）",
-      "openaiShell": "Shell",
-      "openaiImageGeneration": "图像生成",
-      "openaiCodeInterpreter": "代码解释器",
-      "anthropicWebSearch": "网页搜索",
-      "anthropicWebFetch": "网页抓取",
-      "anthropicCodeExecution": "代码执行",
-      "anthropicAdvisor": "Advisor",
-      "anthropicToolSearch": "工具搜索",
-      "xaiWebSearch": "Web Search",
-      "xaiXSearch": "X Search",
-      "xaiCodeExecution": "Code Execution",
-      "xaiAttachmentSearch": "File Attachments Search",
-      "xaiCollectionsSearch": "Collections Search / RAG",
-      "googleGoogleSearch": "Google Search"
     }
   },
   "pricingModes": {
@@ -252,7 +236,7 @@
     "moreItems": "等",
     "loadFailed": "计费配置加载失败",
     "paymentIncomplete": "支付配置不完整",
-    "paymentRateRequired": "需要填写有效的 USD -> CNY 汇率。",
+    "paymentRateRequired": "启用易支付时需要填写有效的美元兑人民币汇率。",
     "stripeRequired": "Stripe 需要填写 Secret Key 和 Webhook Secret。",
     "epayRequired": "易支付需要填写网关地址、商户 ID 和商户密钥。",
     "epayTypesInvalid": "易支付支付类型需要是包含 name 和 type 的 JSON 数组。",

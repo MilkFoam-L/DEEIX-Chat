@@ -40,12 +40,14 @@ import {
   streamImageEdit,
   streamImageGeneration,
   streamMessage as streamConversationMessage,
+  updateMessage,
   type ConversationStreamOptions,
 } from "@/shared/api/conversation";
 import type {
   ConversationDTO,
   ConversationOptions,
   MediaImageRequest,
+  MessageDTO,
   SendMessageRequest,
   SendMessageResult,
   StreamMessageEvent,
@@ -193,6 +195,7 @@ export function useChatMessageSubmit({
   modelOptions,
   selectedToolIDs,
   htmlVisualPromptEnabled,
+  htmlVisualColorMode,
   options,
   draft,
   attachments,
@@ -203,6 +206,7 @@ export function useChatMessageSubmit({
   onConversationCreated,
   touchByPublicID,
   reload,
+  replaceMessage,
   setDraft,
   setAttachments,
   releaseAttachments,
@@ -229,6 +233,7 @@ export function useChatMessageSubmit({
   modelOptions: ChatModelOption[];
   selectedToolIDs: number[];
   htmlVisualPromptEnabled: boolean;
+  htmlVisualColorMode: "light" | "dark";
   options: ConversationOptions;
   draft: string;
   attachments: PendingAttachment[];
@@ -239,6 +244,7 @@ export function useChatMessageSubmit({
   onConversationCreated?: (conversationPublicID: string) => void;
   touchByPublicID: (publicID: string, patch?: Partial<ConversationDTO>) => void;
   reload: () => void;
+  replaceMessage: (message: MessageDTO) => void;
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   setAttachments: React.Dispatch<React.SetStateAction<PendingAttachment[]>>;
   releaseAttachments: (items: PendingAttachment[]) => void;
@@ -601,6 +607,7 @@ export function useChatMessageSubmit({
             content: payloadContent,
             selectedToolIDs: selectedToolIDs.length > 0 ? selectedToolIDs : undefined,
             htmlVisualPrompt: htmlVisualPromptEnabled || undefined,
+            htmlVisualColorMode: htmlVisualPromptEnabled ? htmlVisualColorMode : undefined,
           };
           completed = await streamConversationMessage(token, targetConversationID, chatPayload, streamOptions);
         } else {
@@ -617,6 +624,8 @@ export function useChatMessageSubmit({
         sentSuccessfully = true;
         flushStreamTextNow();
         resetStreamBuffer();
+        const assistantMessageStatus = completed.assistantMessage.status || "success";
+        const assistantMessageSucceeded = assistantMessageStatus === "success";
         setPendingExchange((prev) => {
           if (!prev || prev.key !== exchangeKey) {
             return prev;
@@ -671,7 +680,7 @@ export function useChatMessageSubmit({
             assistantReasoningTokens: completed.assistantMessage.reasoningTokens,
             assistantLatencyMS: completed.assistantMessage.latencyMS,
             assistantProcessTrace: toPendingProcessTrace(completed.assistantMessage.processTrace),
-            assistantStatus: completed.assistantMessage.status || "success",
+            assistantStatus: assistantMessageStatus,
             assistantErrorCode: completed.assistantMessage.errorCode,
             assistantErrorMessage: completed.assistantMessage.errorMessage,
             assistantInlineAlert:
@@ -708,7 +717,7 @@ export function useChatMessageSubmit({
           targetConversationID,
           toConversationPatch(targetConversation, requestPlatformModelName),
         );
-        if (shouldRefreshConversationMetadata) {
+        if (assistantMessageSucceeded && shouldRefreshConversationMetadata) {
           void refreshGeneratedConversationMetadata(
             token,
             targetConversationID,
@@ -719,7 +728,7 @@ export function useChatMessageSubmit({
           });
         }
         releaseAttachments(effectiveAttachments);
-        if ((completed.assistantMessage.status || "success") === "success") {
+        if (assistantMessageSucceeded) {
           notifyResponseCompletion({
             content: completed.assistantMessage.content,
             conversationPublicID: targetConversationID,
@@ -806,6 +815,7 @@ export function useChatMessageSubmit({
       modelOptions,
       selectedToolIDs,
       htmlVisualPromptEnabled,
+      htmlVisualColorMode,
       selectedPlatformModelName,
       sending,
       setAttachments,
@@ -931,6 +941,31 @@ export function useChatMessageSubmit({
     [submitMessage, t],
   );
 
+  const onEditAssistantMessage = React.useCallback(
+    async (message: ChatAreaMessage, content: string) => {
+      const messagePublicID = resolvePersistedPublicID(message.publicID);
+      const nextContent = content.trim();
+      if (!messagePublicID || !nextContent) {
+        toast.error(t("editReplyFailed"), { description: t("continueReplyUnavailable") });
+        return false;
+      }
+      const token = await resolveAccessToken();
+      if (!token) {
+        toast.error(t("editReplyFailed"), { description: t("signInRequired") });
+        return false;
+      }
+      try {
+        const updated = await updateMessage(token, messagePublicID, { content: nextContent });
+        replaceMessage(updated);
+        return true;
+      } catch {
+        toast.error(t("editReplyFailed"), { description: t("retryLater") });
+        return false;
+      }
+    },
+    [replaceMessage, t],
+  );
+
   const onCycleMessageBranch = React.useCallback(
     (parentPublicID: string | null, direction: "previous" | "next") => {
       const siblings = buildChildrenIndex(combinedMessages).get(toBranchKey(parentPublicID)) ?? [];
@@ -959,6 +994,7 @@ export function useChatMessageSubmit({
 
   return {
     onCycleMessageBranch,
+    onEditAssistantMessage,
     onEditUserMessage,
     onContinueAssistantMessage,
     onRetryAssistantMessage,

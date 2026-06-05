@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Check, CircleAlert, Copy, Download, Pencil, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { motion } from "motion/react";
-import { useLocale, useTranslations } from "next-intl";
+import { useLocale, useMessages, useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import { AdminDateTimePicker, adminDateTimeFormValue, adminDateTimeValueToISOStr
 import { AdminBulkConfirmDialog } from "@/features/admin/components/bulk-confirm-dialog";
 import { PlanBillingDialog, PricingBillingDialog } from "@/features/admin/components/sections/billing/billing-dialogs";
 import { PeriodBillingTable, PricingMultiplierCell, PricingUnitCell } from "@/features/admin/components/sections/billing/billing-tables";
+import { SettingsCollapsibleContent } from "@/features/admin/components/sections/shared/settings-collapsible-content";
 import {
   Table,
   TableBody,
@@ -110,6 +111,7 @@ import { resolveApiBaseURL } from "@/shared/api/http-client";
 import { LobeHubIcon } from "@/shared/components/lobehub-icon";
 import { configuredSettingsMap } from "@/shared/lib/settings-meta";
 import { KNOWN_VENDOR_OPTIONS, resolveLobeHubIconURL, resolveModelIdentity } from "@/shared/lib/model-identity";
+import { localizedNativeToolText } from "@/shared/lib/native-tool-i18n";
 
 function formatBillingAmountInput(value: number | null | undefined): string {
   if (!Number.isFinite(value ?? NaN) || (value ?? 0) <= 0) {
@@ -150,6 +152,9 @@ function nativeToolPriceDraftsFrom(items: NativeToolPricingDTO[]): Record<string
 function nativeToolPricingSignature(items: NativeToolPricingDTO[]): string {
   return JSON.stringify(items.map((item) => ({
     toolKey: item.toolKey,
+    label: item.label,
+    description: item.description,
+    type: item.type,
     priceNanousd: item.priceNanousd,
     unit: item.unit,
     priceLabel: item.priceLabel,
@@ -271,6 +276,7 @@ function isRedemptionCodeFormatValid(value: string): boolean {
 
 export function AdminBillingPage() {
   const locale = useLocale();
+  const messages = useMessages();
   const t = useTranslations("adminBilling");
   const tActions = useTranslations("common.actions");
   const tCommonErrors = useTranslations("common.errors");
@@ -1066,7 +1072,7 @@ export function AdminBillingPage() {
   async function savePaymentSettings() {
     const providers = normalizePaymentProviders(paymentSettings.payment_providers);
     const usdToCnyRate = Number(paymentSettings.usd_to_cny_rate);
-    if (providers.length > 0 && (!Number.isFinite(usdToCnyRate) || usdToCnyRate <= 0)) {
+    if (providers.includes("epay") && (!Number.isFinite(usdToCnyRate) || usdToCnyRate <= 0)) {
       toast.error(t("toast.paymentIncomplete"), { description: t("toast.paymentRateRequired") });
       return;
     }
@@ -1449,20 +1455,7 @@ export function AdminBillingPage() {
       </div>
 
       <FieldGroup className="gap-0">
-        <SettingsFieldRow
-          title={t("payment.usdToCnyRate")}
-          description={t("payment.usdToCnyRateDescription")}
-        >
-          <Input
-            id="billing.usd_to_cny_rate"
-            value={paymentSettings.usd_to_cny_rate}
-            className="text-right"
-            disabled={loading || saving}
-            onChange={(event) => updatePaymentSetting("usd_to_cny_rate", event.target.value)}
-          />
-        </SettingsFieldRow>
-
-        <div className="pt-4">
+        <div>
           <Tabs value={paymentTab} onValueChange={(value) => setPaymentTab(value as PaymentProvider)}>
             <SettingsFieldRow
               title={t("payment.channels")}
@@ -1481,35 +1474,37 @@ export function AdminBillingPage() {
               >
                 <Switch size="sm" checked={stripeEnabled} disabled={loading || saving} onCheckedChange={(checked) => setPaymentProviderEnabled("stripe", checked)} />
               </SettingsFieldRow>
-              <SettingsFieldRow
-                title={t("payment.stripeWebhookEndpoint")}
-                description={t("payment.stripeWebhookEndpointDescription")}
-              >
-                <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1">
-                  <Input value={stripeWebhookEndpoint} className="min-w-0 truncate text-left text-xs md:text-right" readOnly />
-                  <Button type="button" variant="secondary" size="icon" className="size-8 shrink-0 rounded-md shadow-none active:scale-90 transition-transform" onClick={() => void copyStripeWebhookEndpoint()} aria-label={tActions("copy")} title={tActions("copy")}>
-                    <Copy className="size-3.5" />
-                  </Button>
-                </div>
-              </SettingsFieldRow>
-              <SettingsFieldRow
-                title={t("payment.stripePublishableKey")}
-                description={t("payment.stripePublishableKeyDescription")}
-              >
-                <Input value={paymentSettings.stripe_publishable_key} className="text-right" disabled={loading || saving} placeholder="pk_..." onChange={(event) => updatePaymentSetting("stripe_publishable_key", event.target.value)} />
-              </SettingsFieldRow>
-              <SettingsFieldRow
-                title={t("payment.stripeSecretKey")}
-                description={t("payment.stripeSecretKeyDescription")}
-              >
-                <Input value={paymentSettings.stripe_secret_key} className="text-right" type="password" disabled={loading || saving} placeholder={paymentConfiguredMap["billing.stripe_secret_key"] ? tInput("configuredPasswordPlaceholder") : "sk_..."} onChange={(event) => updatePaymentSetting("stripe_secret_key", event.target.value)} />
-              </SettingsFieldRow>
-              <SettingsFieldRow
-                title={t("payment.stripeWebhookSecret")}
-                description={t("payment.stripeWebhookSecretDescription")}
-              >
-                <Input value={paymentSettings.stripe_webhook_secret} className="text-right" type="password" disabled={loading || saving} placeholder={paymentConfiguredMap["billing.stripe_webhook_secret"] ? tInput("configuredPasswordPlaceholder") : "whsec_..."} onChange={(event) => updatePaymentSetting("stripe_webhook_secret", event.target.value)} />
-              </SettingsFieldRow>
+              <SettingsCollapsibleContent open={stripeEnabled} contentClassName="space-y-4">
+                <SettingsFieldRow
+                  title={t("payment.stripeWebhookEndpoint")}
+                  description={t("payment.stripeWebhookEndpointDescription")}
+                >
+                  <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1">
+                    <Input value={stripeWebhookEndpoint} className="min-w-0 truncate text-left text-xs md:text-right" readOnly />
+                    <Button type="button" variant="secondary" size="icon" className="size-8 shrink-0 rounded-md shadow-none active:scale-90 transition-transform" onClick={() => void copyStripeWebhookEndpoint()} aria-label={tActions("copy")} title={tActions("copy")}>
+                      <Copy className="size-3.5" />
+                    </Button>
+                  </div>
+                </SettingsFieldRow>
+                <SettingsFieldRow
+                  title={t("payment.stripePublishableKey")}
+                  description={t("payment.stripePublishableKeyDescription")}
+                >
+                  <Input value={paymentSettings.stripe_publishable_key} className="text-right" disabled={loading || saving} placeholder="pk_..." onChange={(event) => updatePaymentSetting("stripe_publishable_key", event.target.value)} />
+                </SettingsFieldRow>
+                <SettingsFieldRow
+                  title={t("payment.stripeSecretKey")}
+                  description={t("payment.stripeSecretKeyDescription")}
+                >
+                  <Input value={paymentSettings.stripe_secret_key} className="text-right" type="password" disabled={loading || saving} placeholder={paymentConfiguredMap["billing.stripe_secret_key"] ? tInput("configuredPasswordPlaceholder") : "sk_..."} onChange={(event) => updatePaymentSetting("stripe_secret_key", event.target.value)} />
+                </SettingsFieldRow>
+                <SettingsFieldRow
+                  title={t("payment.stripeWebhookSecret")}
+                  description={t("payment.stripeWebhookSecretDescription")}
+                >
+                  <Input value={paymentSettings.stripe_webhook_secret} className="text-right" type="password" disabled={loading || saving} placeholder={paymentConfiguredMap["billing.stripe_webhook_secret"] ? tInput("configuredPasswordPlaceholder") : "whsec_..."} onChange={(event) => updatePaymentSetting("stripe_webhook_secret", event.target.value)} />
+                </SettingsFieldRow>
+              </SettingsCollapsibleContent>
             </TabsContent>
 
             <TabsContent value="epay" className="mt-4 space-y-4">
@@ -1519,39 +1514,53 @@ export function AdminBillingPage() {
               >
                 <Switch size="sm" checked={epayEnabled} disabled={loading || saving} onCheckedChange={(checked) => setPaymentProviderEnabled("epay", checked)} />
               </SettingsFieldRow>
-              <SettingsFieldRow
-                title={t("payment.epayGateway")}
-                description={t("payment.epayGatewayDescription")}
-              >
-                <Input value={paymentSettings.epay_gateway_url} className="text-right" disabled={loading || saving} placeholder="https://..." onChange={(event) => updatePaymentSetting("epay_gateway_url", event.target.value)} />
-              </SettingsFieldRow>
-              <SettingsFieldRow
-                title={t("payment.epayPid")}
-                description={t("payment.epayPidDescription")}
-              >
-                <Input value={paymentSettings.epay_pid} className="text-right" disabled={loading || saving} onChange={(event) => updatePaymentSetting("epay_pid", event.target.value)} />
-              </SettingsFieldRow>
-              <SettingsFieldRow
-                title={t("payment.epayKey")}
-                description={t("payment.epayKeyDescription")}
-              >
-                <Input value={paymentSettings.epay_key} className="text-right" type="password" disabled={loading || saving} placeholder={paymentConfiguredMap["billing.epay_key"] ? tInput("configuredPasswordPlaceholder") : ""} onChange={(event) => updatePaymentSetting("epay_key", event.target.value)} />
-              </SettingsFieldRow>
-              <Field>
-                <div className="space-y-2">
-                  <div>
-                    <FieldLabel>{t("payment.epayTypes")}</FieldLabel>
-                    <FieldDescription className="text-[11px]">{t("payment.epayTypesDescription")}</FieldDescription>
-                  </div>
-                  <Textarea
-                    value={paymentSettings.epay_types}
-                    className="h-28 w-full resize-none overflow-y-auto font-mono [field-sizing:fixed]"
+              <SettingsCollapsibleContent open={epayEnabled} contentClassName="space-y-4">
+                <SettingsFieldRow
+                  title={t("payment.usdToCnyRate")}
+                  description={t("payment.usdToCnyRateDescription")}
+                >
+                  <Input
+                    id="billing.usd_to_cny_rate"
+                    value={paymentSettings.usd_to_cny_rate}
+                    className="text-right"
                     disabled={loading || saving}
-                    spellCheck={false}
-                    onChange={(event) => updatePaymentSetting("epay_types", event.target.value)}
+                    onChange={(event) => updatePaymentSetting("usd_to_cny_rate", event.target.value)}
                   />
-                </div>
-              </Field>
+                </SettingsFieldRow>
+                <SettingsFieldRow
+                  title={t("payment.epayGateway")}
+                  description={t("payment.epayGatewayDescription")}
+                >
+                  <Input value={paymentSettings.epay_gateway_url} className="text-right" disabled={loading || saving} placeholder="https://..." onChange={(event) => updatePaymentSetting("epay_gateway_url", event.target.value)} />
+                </SettingsFieldRow>
+                <SettingsFieldRow
+                  title={t("payment.epayPid")}
+                  description={t("payment.epayPidDescription")}
+                >
+                  <Input value={paymentSettings.epay_pid} className="text-right" disabled={loading || saving} onChange={(event) => updatePaymentSetting("epay_pid", event.target.value)} />
+                </SettingsFieldRow>
+                <SettingsFieldRow
+                  title={t("payment.epayKey")}
+                  description={t("payment.epayKeyDescription")}
+                >
+                  <Input value={paymentSettings.epay_key} className="text-right" type="password" disabled={loading || saving} placeholder={paymentConfiguredMap["billing.epay_key"] ? tInput("configuredPasswordPlaceholder") : ""} onChange={(event) => updatePaymentSetting("epay_key", event.target.value)} />
+                </SettingsFieldRow>
+                <Field>
+                  <div className="space-y-2">
+                    <div>
+                      <FieldLabel>{t("payment.epayTypes")}</FieldLabel>
+                      <FieldDescription className="text-[11px]">{t("payment.epayTypesDescription")}</FieldDescription>
+                    </div>
+                    <Textarea
+                      value={paymentSettings.epay_types}
+                      className="h-28 w-full resize-none overflow-y-auto font-mono [field-sizing:fixed]"
+                      disabled={loading || saving}
+                      spellCheck={false}
+                      onChange={(event) => updatePaymentSetting("epay_types", event.target.value)}
+                    />
+                  </div>
+                </Field>
+              </SettingsCollapsibleContent>
             </TabsContent>
           </Tabs>
         </div>
@@ -2080,58 +2089,72 @@ export function AdminBillingPage() {
             </SettingsFieldRow>
           </SettingsFieldItem>
         </SettingsFieldList>
-        <div className="mt-5 space-y-2">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("toolPricing.provider")}</TableHead>
-                <TableHead>{t("toolPricing.tool")}</TableHead>
-                <TableHead className="text-right">{t("toolPricing.price")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {nativeToolPricing.map((row) => (
-                <TableRow key={`${row.provider}-${row.toolKey}`}>
-                  <TableCell className="py-1.5 text-xs text-muted-foreground">{row.provider}</TableCell>
-                  <TableCell className="py-1.5 text-xs text-foreground">{t(`toolPricing.tools.${row.toolKey}`)}</TableCell>
-                  <TableCell className="py-1.5 text-right font-mono text-xs text-muted-foreground">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span className="text-muted-foreground">$</span>
-                      <Input
-                        value={nativeToolPriceDrafts[row.toolKey] ?? formatNativeToolPriceInput(row.priceNanousd)}
-                        inputMode="decimal"
-                        className="h-7 w-24 text-right font-mono text-xs"
-                        disabled={loading || nativeToolBillingSaving}
-                        aria-label={`${t(`toolPricing.tools.${row.toolKey}`)} ${t("toolPricing.price")}`}
-                        onChange={(event) => {
-                          const nextDraft = event.target.value;
-                          const nextNanousd = nativeToolPriceInputToNanousd(nextDraft);
-                          setNativeToolPriceDrafts((current) => ({
-                            ...current,
-                            [row.toolKey]: nextDraft,
-                          }));
-                          if (nextNanousd === null) {
-                            return;
-                          }
-                          setNativeToolPricing((current) => current.map((item) => (
-                            item.toolKey === row.toolKey
-                              ? { ...item, priceNanousd: nextNanousd, unit: "call", priceLabel: "", billable: nextNanousd > 0 }
-                              : item
-                          )));
-                        }}
-                      />
-                      <span className="whitespace-nowrap text-muted-foreground">
-                        / {t("toolPricing.units.call")}
-                      </span>
-                    </div>
-                  </TableCell>
+        <SettingsCollapsibleContent open={nativeToolBillingEnabled} contentClassName="mt-5 space-y-2">
+            <p className="px-1 text-[11px] leading-5 text-muted-foreground">
+              {t("toolPricing.nativeToolCount", { count: nativeToolPricing.length })}
+            </p>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("toolPricing.provider")}</TableHead>
+                  <TableHead>{t("toolPricing.tool")}</TableHead>
+                  <TableHead>{t("toolPricing.type")}</TableHead>
+                  <TableHead className="text-right">{t("toolPricing.price")}</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          <p className="text-[11px] leading-5 text-muted-foreground">{t("toolPricing.defaultPriceDescription")}</p>
-          <p className="text-[11px] leading-5 text-muted-foreground">{t("toolPricing.note")}</p>
-        </div>
+              </TableHeader>
+              <TableBody>
+                {nativeToolPricing.map((row) => {
+                  const label = localizedNativeToolText(messages, "nativeToolLabels", row.toolKey) || row.label || row.type || row.toolKey;
+                  const description = localizedNativeToolText(messages, "nativeToolDescriptions", row.toolKey) || row.description || row.type || row.toolKey;
+                  return (
+                    <TableRow key={`${row.provider}-${row.toolKey}`}>
+                      <TableCell className="py-1.5 text-xs text-muted-foreground">{row.provider}</TableCell>
+                      <TableCell className="py-1.5 text-xs text-foreground">
+                        <div className="flex min-w-0 flex-col">
+                          <span className="truncate">{label}</span>
+                          <span className="truncate text-[11px] text-muted-foreground">{description}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="py-1.5 font-mono text-xs text-muted-foreground">{row.type || row.toolKey}</TableCell>
+                      <TableCell className="py-1.5 text-right font-mono text-xs text-muted-foreground">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="text-muted-foreground">$</span>
+                          <Input
+                            value={nativeToolPriceDrafts[row.toolKey] ?? formatNativeToolPriceInput(row.priceNanousd)}
+                            inputMode="decimal"
+                            className="h-7 w-24 text-right font-mono text-xs"
+                            disabled={loading || nativeToolBillingSaving}
+                            aria-label={`${label} ${t("toolPricing.price")}`}
+                            onChange={(event) => {
+                              const nextDraft = event.target.value;
+                              const nextNanousd = nativeToolPriceInputToNanousd(nextDraft);
+                              setNativeToolPriceDrafts((current) => ({
+                                ...current,
+                                [row.toolKey]: nextDraft,
+                              }));
+                              if (nextNanousd === null) {
+                                return;
+                              }
+                              setNativeToolPricing((current) => current.map((item) => (
+                                item.toolKey === row.toolKey
+                                  ? { ...item, priceNanousd: nextNanousd, unit: "call", priceLabel: "", billable: nextNanousd > 0 }
+                                  : item
+                              )));
+                            }}
+                          />
+                          <span className="whitespace-nowrap text-muted-foreground">
+                            / {t("toolPricing.units.call")}
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+            <p className="text-[11px] leading-5 text-muted-foreground">{t("toolPricing.defaultPriceDescription")}</p>
+            <p className="text-[11px] leading-5 text-muted-foreground">{t("toolPricing.note")}</p>
+        </SettingsCollapsibleContent>
       </SettingsSection>
 
       <PlanBillingDialog

@@ -7,6 +7,24 @@ import (
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/llm"
 )
 
+func TestModelOptionPolicyProtocolKeyNormalizesProviderAliases(t *testing.T) {
+	tests := map[string]string{
+		"xai":       "xai_responses",
+		"grok":      "xai_responses",
+		"anthropic": "anthropic_messages",
+		"claude":    "anthropic_messages",
+		"google":    "gemini_generate_content",
+		"gemini":    "gemini_generate_content",
+		"openai":    "openai_responses",
+	}
+
+	for protocol, expected := range tests {
+		if got := modelOptionPolicyProtocolKey(protocol); got != expected {
+			t.Fatalf("expected %s to normalize to %s, got %s", protocol, expected, got)
+		}
+	}
+}
+
 func TestFilterModelOptionsAllowlistUsesDefaultAndProtocolPaths(t *testing.T) {
 	filtered := filterModelOptions(map[string]interface{}{
 		"temperature":  0.7,
@@ -231,6 +249,112 @@ func TestFilterModelOptionsPreservesAllowedXAINativeToolParameters(t *testing.T)
 	}
 }
 
+func TestFilterModelOptionsPreservesConfiguredNativeToolsAndDropsExternalTools(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"store": false,
+		"tools": []interface{}{
+			map[string]interface{}{
+				"type":                       "x_search",
+				"enable_image_understanding": true,
+			},
+			map[string]interface{}{
+				"type":            "future_search",
+				"fresh_parameter": "enabled",
+			},
+			map[string]interface{}{
+				"type":   "external_function",
+				"name":   "server_attack",
+				"strict": true,
+			},
+			map[string]interface{}{
+				"type": "disabled_native_tool",
+			},
+		},
+	}, llm.AdapterXAIResponses, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: `{"default":["store"]}`,
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+		ModelCapabilitiesJSON: `{
+			"nativeTools": [
+				{
+					"key": "xai.x_search",
+					"protocols": ["xai_responses"],
+					"type": "x_search",
+					"enabled": true,
+					"payload": {"type": "x_search"}
+				},
+				{
+					"key": "xai.future_search",
+					"protocols": ["xai_responses"],
+					"type": "future_search",
+					"enabled": true,
+					"payload": {"type": "future_search"}
+				},
+				{
+					"key": "xai.disabled_native_tool",
+					"protocols": ["xai_responses"],
+					"type": "disabled_native_tool",
+					"enabled": false,
+					"payload": {"type": "disabled_native_tool"}
+				}
+			]
+		}`,
+	})
+
+	if filtered["store"] != false {
+		t.Fatalf("expected allowed non-tool option to pass, got %#v", filtered)
+	}
+	tools, ok := filtered["tools"].([]map[string]interface{})
+	if !ok || len(tools) != 2 {
+		t.Fatalf("expected configured native tools only, got %#v", filtered["tools"])
+	}
+	if tools[0]["type"] != "x_search" || tools[0]["enable_image_understanding"] != true {
+		t.Fatalf("expected catalog native tool parameters to pass, got %#v", tools[0])
+	}
+	if tools[1]["type"] != "future_search" || tools[1]["fresh_parameter"] != "enabled" {
+		t.Fatalf("expected administrator-defined native tool parameters to pass, got %#v", tools[1])
+	}
+}
+
+func TestFilterModelOptionsPreservesNativeToolAcrossConfiguredProtocols(t *testing.T) {
+	capabilitiesJSON := `{
+		"nativeTools": [
+			{
+				"key": "openai.web_search",
+				"protocols": ["openai_chat_completions", "openai_responses"],
+				"type": "web_search",
+				"enabled": true,
+				"payload": {"type": "web_search"}
+			}
+		]
+	}`
+	for _, adapter := range []string{llm.AdapterOpenAIChatCompletions, llm.AdapterOpenAIResponses} {
+		t.Run(adapter, func(t *testing.T) {
+			filtered := filterModelOptions(map[string]interface{}{
+				"tools": []interface{}{
+					map[string]interface{}{
+						"type":                "web_search",
+						"search_context_size": "low",
+					},
+				},
+			}, adapter, modelOptionPolicyConfig{
+				Mode:                  modelOptionPolicyAllowlist,
+				AllowedPathsJSON:      `{"default":[]}`,
+				DeniedPathsJSON:       config.DefaultModelOptionDeniedPathsJSON(),
+				ModelCapabilitiesJSON: capabilitiesJSON,
+			})
+
+			tools, ok := filtered["tools"].([]map[string]interface{})
+			if !ok || len(tools) != 1 {
+				t.Fatalf("expected one official tool for %s, got %#v", adapter, filtered)
+			}
+			if tools[0]["type"] != "web_search" || tools[0]["search_context_size"] != "low" {
+				t.Fatalf("expected web_search parameters to pass for %s, got %#v", adapter, tools[0])
+			}
+		})
+	}
+}
+
 func TestFilterModelOptionsDerivesNativeToolKeysFromCapabilityDefaultTools(t *testing.T) {
 	filtered := filterModelOptions(map[string]interface{}{
 		"store": false,
@@ -384,7 +508,13 @@ func TestFilterModelOptionsGeminiPolicyKeyMatchesGoogleAdapter(t *testing.T) {
 		t.Fatalf("expected unlisted gemini option removed, got %#v", generationConfig)
 	}
 	tools := filtered["tools"].([]map[string]interface{})
-	if len(tools) != 1 || tools[0]["type"] != "google_search" {
+	if len(tools) != 1 {
+		t.Fatalf("expected Gemini google_search tool, got %#v", tools)
+	}
+	if _, ok := tools[0]["type"]; ok {
+		t.Fatalf("expected Gemini google_search tool without type, got %#v", tools)
+	}
+	if _, ok := tools[0]["google_search"]; !ok {
 		t.Fatalf("expected Gemini google_search tool, got %#v", tools)
 	}
 }
@@ -428,11 +558,125 @@ func TestFilterModelOptionsGoogleImageAllowsImageConfigAndGoogleSearch(t *testin
 	if len(tools) != 1 {
 		t.Fatalf("expected one normalized google_search tool, got %#v", tools)
 	}
-	if tools[0]["type"] != "google_search" {
-		t.Fatalf("expected google_search tool type, got %#v", tools)
+	if _, ok := tools[0]["type"]; ok {
+		t.Fatalf("expected google_search tool without type, got %#v", tools)
 	}
 	if _, ok := tools[0]["google_search"]; !ok {
 		t.Fatalf("expected google_search tool, got %#v", tools)
+	}
+}
+
+func TestFilterModelOptionsPreservesGoogleSearchImageSearchParameters(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"tools": []interface{}{
+			map[string]interface{}{
+				"google_search": map[string]interface{}{
+					"searchTypes": map[string]interface{}{
+						"webSearch":   map[string]interface{}{},
+						"imageSearch": map[string]interface{}{},
+					},
+				},
+			},
+		},
+	}, llm.AdapterGoogleImageGeneration, modelOptionPolicyConfig{
+		Mode:                  modelOptionPolicyAllowlist,
+		AllowedPathsJSON:      config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:       config.DefaultModelOptionDeniedPathsJSON(),
+		ModelCapabilitiesJSON: `{"nativeToolKeys":["google.google_search"]}`,
+	})
+
+	tools, ok := filtered["tools"].([]map[string]interface{})
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected google_search tool, got %#v", filtered)
+	}
+	googleSearch := tools[0]["google_search"].(map[string]interface{})
+	searchTypes := googleSearch["searchTypes"].(map[string]interface{})
+	if _, ok := searchTypes["webSearch"]; !ok {
+		t.Fatalf("expected webSearch to pass, got %#v", tools)
+	}
+	if _, ok := searchTypes["imageSearch"]; !ok {
+		t.Fatalf("expected imageSearch to pass, got %#v", tools)
+	}
+}
+
+func TestFilterModelOptionsPreservesGoogleNativeToolFieldPayloads(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"tools": []interface{}{
+			map[string]interface{}{"code_execution": map[string]interface{}{}},
+			map[string]interface{}{"url_context": map[string]interface{}{}},
+		},
+	}, llm.AdapterGoogleGenerateContent, modelOptionPolicyConfig{
+		Mode:                  modelOptionPolicyAllowlist,
+		AllowedPathsJSON:      config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:       config.DefaultModelOptionDeniedPathsJSON(),
+		ModelCapabilitiesJSON: `{"nativeToolKeys":["google.code_execution","google.url_context"]}`,
+	})
+
+	tools, ok := filtered["tools"].([]map[string]interface{})
+	if !ok || len(tools) != 2 {
+		t.Fatalf("expected Google native tools, got %#v", filtered)
+	}
+	for _, key := range []string{"code_execution", "url_context"} {
+		found := false
+		for _, tool := range tools {
+			if _, ok := tool["type"]; ok {
+				t.Fatalf("expected Google native tool without type, got %#v", tool)
+			}
+			if _, ok := tool[key]; ok {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected Google %s tool, got %#v", key, tools)
+		}
+	}
+}
+
+func TestFilterModelOptionsCanonicalizesExistingGoogleNativeToolConfigs(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"tools": []interface{}{
+			map[string]interface{}{"type": "code_execution"},
+			map[string]interface{}{"type": "url_context"},
+		},
+	}, llm.AdapterGoogleGenerateContent, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+		ModelCapabilitiesJSON: `{
+			"nativeTools": [
+				{
+					"key": "google.code_execution",
+					"protocols": ["gemini_generate_content"],
+					"type": "code_execution",
+					"payload": {"type": "code_execution"}
+				},
+				{
+					"key": "google.url_context",
+					"protocols": ["gemini_generate_content"],
+					"type": "url_context",
+					"payload": {"type": "url_context"}
+				}
+			]
+		}`,
+	})
+
+	tools, ok := filtered["tools"].([]map[string]interface{})
+	if !ok || len(tools) != 2 {
+		t.Fatalf("expected existing Google native tool configs to be preserved, got %#v", filtered)
+	}
+	for _, key := range []string{"code_execution", "url_context"} {
+		found := false
+		for _, tool := range tools {
+			if _, ok := tool["type"]; ok {
+				t.Fatalf("expected canonical Google native tool without type, got %#v", tool)
+			}
+			if _, ok := tool[key]; ok {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected canonical Google %s payload, got %#v", key, tools)
+		}
 	}
 }
 

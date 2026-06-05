@@ -54,6 +54,7 @@ type Service struct {
 	modelPricingInvalidator       func()
 	platformModelIdentityResolver platformModelIdentityResolver
 	modelPricingCatalog           modelPricingCatalogProvider
+	nativeToolCatalog             nativeToolCatalogProvider
 	auditWriter                   auditWriter
 	redemptionCodeSecret          string
 }
@@ -64,6 +65,10 @@ type platformModelIdentityResolver interface {
 
 type modelPricingCatalogProvider interface {
 	ListActivePlatformModelNames(ctx context.Context) (map[string]struct{}, error)
+}
+
+type nativeToolCatalogProvider interface {
+	ListNativeToolDefinitions(ctx context.Context) ([]nativetool.Definition, error)
 }
 
 // UsagePricingInput 定义账单计算入参。
@@ -129,6 +134,9 @@ type ServiceUsageInput struct {
 type NativeToolPricingView struct {
 	Provider     string
 	ToolKey      string
+	Label        string
+	Description  string
+	Type         string
 	PriceNanousd int64
 	Unit         string
 	PriceLabel   string
@@ -224,6 +232,14 @@ type TopUpPaymentOrderInput struct {
 	USDToCNYRate float64
 }
 
+type paymentQuote struct {
+	BaseCurrency    string
+	BaseAmountCents int64
+	PayCurrency     string
+	PayAmountCents  int64
+	FXRate          float64
+}
+
 // BillingAccountBalanceInput 定义管理员设置余额入参。
 type BillingAccountBalanceInput struct {
 	UserID      uint
@@ -261,6 +277,14 @@ func (s *Service) SetModelPricingCatalogProvider(provider modelPricingCatalogPro
 	s.modelPricingCatalog = provider
 }
 
+// SetNativeToolCatalogProvider 注入平台级官方原生工具目录提供者。
+func (s *Service) SetNativeToolCatalogProvider(provider nativeToolCatalogProvider) {
+	if s == nil {
+		return
+	}
+	s.nativeToolCatalog = provider
+}
+
 // SetRedemptionCodeSecret 注入兑换码 HMAC 与密文存储密钥。
 func (s *Service) SetRedemptionCodeSecret(secret string) {
 	if s == nil {
@@ -287,14 +311,29 @@ func (s *Service) GetBillingMode(ctx context.Context) (string, error) {
 	return s.repo.GetBillingMode(ctx)
 }
 
-// ListNativeToolDefaultPricing 返回当前内置的原生工具默认价格目录。
-func ListNativeToolDefaultPricing() []NativeToolPricingView {
-	return nativeToolPricingViews(nativetool.PricingDefinitions())
+// ListNativeToolPricing 返回应用管理员覆盖后的平台级原生工具计费价格目录。
+func (s *Service) ListNativeToolPricing(ctx context.Context, rawPricingJSON string) ([]NativeToolPricingView, error) {
+	definitions, err := s.nativeToolDefinitions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return nativeToolPricingViews(nativetool.PricingDefinitionsWithOverridesFromDefinitions(rawPricingJSON, definitions)), nil
 }
 
-// ListNativeToolPricing 返回应用管理员覆盖后的原生工具计费价格目录。
-func ListNativeToolPricing(rawPricingJSON string) []NativeToolPricingView {
-	return nativeToolPricingViews(nativetool.PricingDefinitionsWithOverrides(rawPricingJSON))
+// NormalizeNativeToolPricingJSON 基于当前平台级原生工具目录校验并格式化价格配置。
+func (s *Service) NormalizeNativeToolPricingJSON(ctx context.Context, overrides map[string]nativetool.PricingOverride) (string, error) {
+	definitions, err := s.nativeToolDefinitions(ctx)
+	if err != nil {
+		return "", err
+	}
+	return nativetool.PricingOverridesJSONForDefinitions(overrides, definitions)
+}
+
+func (s *Service) nativeToolDefinitions(ctx context.Context) ([]nativetool.Definition, error) {
+	if s == nil || s.nativeToolCatalog == nil {
+		return nativetool.Definitions(), nil
+	}
+	return s.nativeToolCatalog.ListNativeToolDefinitions(ctx)
 }
 
 func nativeToolPricingViews(items []nativetool.PricingDefinition) []NativeToolPricingView {
@@ -303,6 +342,9 @@ func nativeToolPricingViews(items []nativetool.PricingDefinition) []NativeToolPr
 		results = append(results, NativeToolPricingView{
 			Provider:     item.Provider,
 			ToolKey:      item.ToolKey,
+			Label:        item.Label,
+			Description:  item.Description,
+			Type:         item.Type,
 			PriceNanousd: item.PriceNanousd,
 			Unit:         item.Unit,
 			PriceLabel:   item.PriceLabel,
@@ -646,10 +688,8 @@ func (s *Service) CreatePaymentOrder(ctx context.Context, input PaymentOrderInpu
 	if baseAmountCents <= 0 {
 		return nil, nil, nil, repository.ErrInvalidInput
 	}
-	payCurrency := "CNY"
-	fxRate := resolveUSDToCNYRate(input.USDToCNYRate)
-	payAmountCents := convertPaymentAmountCents(baseAmountCents, baseCurrency, payCurrency, fxRate)
-	if payAmountCents <= 0 {
+	quote := resolvePaymentQuote(provider, baseCurrency, baseAmountCents, input.USDToCNYRate)
+	if quote.PayAmountCents <= 0 {
 		return nil, nil, nil, repository.ErrInvalidInput
 	}
 
@@ -667,11 +707,11 @@ func (s *Service) CreatePaymentOrder(ctx context.Context, input PaymentOrderInpu
 		"price_code":        price.Code,
 		"billing_interval":  price.BillingInterval,
 		"cycles":            cycles,
-		"base_currency":     baseCurrency,
-		"base_amount_cents": baseAmountCents,
-		"pay_currency":      payCurrency,
-		"pay_amount_cents":  payAmountCents,
-		"fx_rate":           formatFXRate(fxRate),
+		"base_currency":     quote.BaseCurrency,
+		"base_amount_cents": quote.BaseAmountCents,
+		"pay_currency":      quote.PayCurrency,
+		"pay_amount_cents":  quote.PayAmountCents,
+		"fx_rate":           formatFXRate(quote.FXRate),
 		"provider":          provider,
 	}
 	snapshotJSON := "{}"
@@ -686,11 +726,11 @@ func (s *Service) CreatePaymentOrder(ctx context.Context, input PaymentOrderInpu
 		PriceID:         price.ID,
 		Provider:        provider,
 		Status:          domainbilling.PaymentStatusPending,
-		BaseCurrency:    baseCurrency,
-		BaseAmountCents: baseAmountCents,
-		PayCurrency:     payCurrency,
-		PayAmountCents:  payAmountCents,
-		FXRate:          formatFXRate(fxRate),
+		BaseCurrency:    quote.BaseCurrency,
+		BaseAmountCents: quote.BaseAmountCents,
+		PayCurrency:     quote.PayCurrency,
+		PayAmountCents:  quote.PayAmountCents,
+		FXRate:          formatFXRate(quote.FXRate),
 		BillingInterval: price.BillingInterval,
 		Cycles:          cycles,
 		ExpiredAt:       &expiredAt,
@@ -723,11 +763,9 @@ func (s *Service) CreateTopUpPaymentOrder(ctx context.Context, input TopUpPaymen
 
 	baseCurrency := "USD"
 	baseAmountCents := input.AmountCents
-	payCurrency := "CNY"
-	fxRate := resolveUSDToCNYRate(input.USDToCNYRate)
-	payAmountCents := convertPaymentAmountCents(baseAmountCents, baseCurrency, payCurrency, fxRate)
+	quote := resolvePaymentQuote(provider, baseCurrency, baseAmountCents, input.USDToCNYRate)
 	creditNanousd := centsToNanousd(baseAmountCents)
-	if payAmountCents <= 0 || creditNanousd <= 0 {
+	if quote.PayAmountCents <= 0 || creditNanousd <= 0 {
 		return nil, repository.ErrInvalidInput
 	}
 
@@ -739,11 +777,11 @@ func (s *Service) CreateTopUpPaymentOrder(ctx context.Context, input TopUpPaymen
 	expiredAt := now.Add(30 * time.Minute)
 	snapshot := map[string]interface{}{
 		"order_type":        domainbilling.PaymentOrderTypeTopUp,
-		"base_currency":     baseCurrency,
-		"base_amount_cents": baseAmountCents,
-		"pay_currency":      payCurrency,
-		"pay_amount_cents":  payAmountCents,
-		"fx_rate":           formatFXRate(fxRate),
+		"base_currency":     quote.BaseCurrency,
+		"base_amount_cents": quote.BaseAmountCents,
+		"pay_currency":      quote.PayCurrency,
+		"pay_amount_cents":  quote.PayAmountCents,
+		"fx_rate":           formatFXRate(quote.FXRate),
 		"credit_nanousd":    creditNanousd,
 		"provider":          provider,
 	}
@@ -757,11 +795,11 @@ func (s *Service) CreateTopUpPaymentOrder(ctx context.Context, input TopUpPaymen
 		UserID:          input.UserID,
 		Provider:        provider,
 		Status:          domainbilling.PaymentStatusPending,
-		BaseCurrency:    baseCurrency,
-		BaseAmountCents: baseAmountCents,
-		PayCurrency:     payCurrency,
-		PayAmountCents:  payAmountCents,
-		FXRate:          formatFXRate(fxRate),
+		BaseCurrency:    quote.BaseCurrency,
+		BaseAmountCents: quote.BaseAmountCents,
+		PayCurrency:     quote.PayCurrency,
+		PayAmountCents:  quote.PayAmountCents,
+		FXRate:          formatFXRate(quote.FXRate),
 		CreditNanousd:   creditNanousd,
 		BillingInterval: domainbilling.IntervalLifetime,
 		Cycles:          1,
@@ -1401,11 +1439,15 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 	if err != nil {
 		return nil, err
 	}
-	nativeToolPricingOverrides, err := nativetool.ParsePricingOverridesJSON(nativeToolPricingJSON)
+	nativeToolDefinitions, err := s.nativeToolDefinitions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nativeToolPricingOverrides, err := nativetool.ParsePricingOverridesJSONForDefinitions(nativeToolPricingJSON, nativeToolDefinitions)
 	if err != nil {
 		nativeToolPricingOverrides = map[string]nativetool.PricingOverride{}
 	}
-	nativeToolItems, nativeToolBilledNanousd := buildNativeToolServiceItems(input, mode, isFreeModel, nativeToolBillingEnabled, nativeToolPricingOverrides)
+	nativeToolItems, nativeToolBilledNanousd := buildNativeToolServiceItems(input, mode, isFreeModel, nativeToolBillingEnabled, nativeToolPricingOverrides, nativeToolDefinitions)
 	if len(nativeToolItems) > 0 {
 		serviceItems = append(serviceItems, nativeToolItems...)
 		serviceBilledNanousd += nativeToolBilledNanousd
@@ -1466,7 +1508,7 @@ func (s *Service) BuildUsageLedger(ctx context.Context, input UsagePricingInput)
 		"duration_billed_nanousd":                  durationBilledNanousd,
 		"server_side_tool_usage":                   normalizeUsageCountMap(input.ServerSideToolUsage),
 		"native_tool_billing_enabled":              nativeToolBillingEnabled,
-		"native_tool_pricing_source":               nativeToolPricingSourceForSnapshot(nativeToolPricingJSON),
+		"native_tool_pricing_source":               nativeToolPricingSourceForSnapshot(nativeToolPricingJSON, nativeToolDefinitions),
 		"native_tool_billed_nanousd":               nativeToolBilledNanousd,
 		"base_service_billed_nanousd":              serviceBilledNanousd,
 		"service_items":                            usageServiceItemSnapshots(serviceItems),
@@ -2718,7 +2760,7 @@ func paginateModelPricing(items []domainbilling.ModelPricing, offset int, limit 
 }
 
 // buildNativeToolServiceItems 将原生 server-side tool 调用转换为账单服务项。
-func buildNativeToolServiceItems(input UsagePricingInput, billingMode string, isFreeModel bool, enabled bool, pricingOverrides map[string]nativetool.PricingOverride) ([]domainbilling.UsageServiceItem, int64) {
+func buildNativeToolServiceItems(input UsagePricingInput, billingMode string, isFreeModel bool, enabled bool, pricingOverrides map[string]nativetool.PricingOverride, definitions []nativetool.Definition) ([]domainbilling.UsageServiceItem, int64) {
 	if billingMode == "self" || isFreeModel || !enabled || len(input.ServerSideToolUsage) == 0 {
 		return []domainbilling.UsageServiceItem{}, 0
 	}
@@ -2729,7 +2771,7 @@ func buildNativeToolServiceItems(input UsagePricingInput, billingMode string, is
 	results := make([]domainbilling.UsageServiceItem, 0, len(counts))
 	var total int64
 	for toolName, count := range counts {
-		price, ok := nativeToolDefaultCallPrice(input, toolName, pricingOverrides)
+		price, ok := nativeToolDefaultCallPrice(input, toolName, pricingOverrides, definitions)
 		if !ok || price.NanousdPerCall <= 0 || count <= 0 {
 			continue
 		}
@@ -2753,36 +2795,15 @@ func buildNativeToolServiceItems(input UsagePricingInput, billingMode string, is
 }
 
 // nativeToolDefaultCallPrice 返回当前已适配厂商原生工具的官方默认按次价格。
-func nativeToolDefaultCallPrice(input UsagePricingInput, toolName string, pricingOverrides map[string]nativetool.PricingOverride) (nativetool.UsagePrice, bool) {
-	key, ok := nativetool.UsagePricingKey(input.ProviderProtocol, toolName)
-	if !ok {
-		return nativetool.UsagePrice{}, false
-	}
-	if key == "openaiWebSearchStandard" && isOpenAIWebSearchReasoningModel(input) {
-		key = "openaiWebSearchReasoning"
-	}
-	return nativetool.UsagePriceByKeyWithOverrides(key, pricingOverrides)
+func nativeToolDefaultCallPrice(input UsagePricingInput, toolName string, pricingOverrides map[string]nativetool.PricingOverride, definitions []nativetool.Definition) (nativetool.UsagePrice, bool) {
+	return nativetool.UsagePriceForToolWithOverrides(input.ProviderProtocol, toolName, definitions, pricingOverrides)
 }
 
-func nativeToolPricingSourceForSnapshot(raw string) string {
-	if nativetool.PricingOverridesUseDefaults(raw) {
+func nativeToolPricingSourceForSnapshot(raw string, definitions []nativetool.Definition) string {
+	if nativetool.PricingOverridesUseDefaultsForDefinitions(raw, definitions) {
 		return nativeToolPricingSource
 	}
 	return "admin_configured"
-}
-
-// isOpenAIWebSearchReasoningModel 区分 OpenAI Web Search 的推理与非推理模型价格。
-func isOpenAIWebSearchReasoningModel(input UsagePricingInput) bool {
-	for _, name := range []string{input.UpstreamModelName, input.PlatformModelName} {
-		modelName := strings.ToLower(strings.TrimSpace(name))
-		switch {
-		case strings.HasPrefix(modelName, "gpt-5"):
-			return true
-		case strings.HasPrefix(modelName, "o1"), strings.HasPrefix(modelName, "o3"), strings.HasPrefix(modelName, "o4"):
-			return true
-		}
-	}
-	return false
 }
 
 // nativeToolServiceCode 生成原生工具服务项编码，供账单明细和快照稳定引用。
@@ -2813,6 +2834,24 @@ func resolveUSDToCNYRate(value float64) float64 {
 	return value
 }
 
+func resolvePaymentQuote(provider string, baseCurrency string, baseAmountCents int64, usdToCNYRate float64) paymentQuote {
+	baseCurrency = normalizeCurrency(baseCurrency)
+	quote := paymentQuote{
+		BaseCurrency:    baseCurrency,
+		BaseAmountCents: baseAmountCents,
+		PayCurrency:     baseCurrency,
+		PayAmountCents:  baseAmountCents,
+		FXRate:          1,
+	}
+	if provider != domainbilling.PaymentProviderEPay {
+		return quote
+	}
+	quote.PayCurrency = "CNY"
+	quote.FXRate = resolveUSDToCNYRate(usdToCNYRate)
+	quote.PayAmountCents = convertPaymentAmountCents(baseAmountCents, baseCurrency, quote.PayCurrency, quote.FXRate)
+	return quote
+}
+
 func convertPaymentAmountCents(baseAmountCents int64, baseCurrency string, payCurrency string, rate float64) int64 {
 	if baseAmountCents <= 0 {
 		return 0
@@ -2825,7 +2864,7 @@ func convertPaymentAmountCents(baseAmountCents int64, baseCurrency string, payCu
 	if baseCurrency == "USD" && payCurrency == "CNY" {
 		return int64(math.Round(float64(baseAmountCents) * resolveUSDToCNYRate(rate)))
 	}
-	return baseAmountCents
+	return 0
 }
 
 func formatFXRate(value float64) string {
