@@ -9,6 +9,7 @@ import { ChevronDown } from "@/components/animate-ui/icons/chevron-down";
 import { ChevronUp } from "@/components/animate-ui/icons/chevron-up";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   downloadMarkdownImageSource,
@@ -188,11 +189,18 @@ const SAFE_HTML_STYLE_PROPERTIES: ReadonlySet<string> = new Set([
   "placeContent",
   "placeItems",
   "placeSelf",
+  "position",
   "rowGap",
   "textAlign",
+  "top",
+  "right",
+  "bottom",
+  "left",
+  "transform",
   "verticalAlign",
   "whiteSpace",
   "width",
+  "zIndex",
 ]);
 const KATEX_SPAN_CLASS_NAMES = [
   "katex",
@@ -449,6 +457,10 @@ function getLineCount(value: string): number {
   return value.replace(/\n$/, "").split("\n").length;
 }
 
+function isMermaidLanguage(language: string): boolean {
+  return language === "mermaid" || language === "mmd";
+}
+
 function CodeBlockActionButton({
   label,
   children,
@@ -558,29 +570,29 @@ function ExternalLinkSafetyDialog({ isOpen, onClose, onConfirm, url }: ExternalL
           <DialogDescription>{t("description")}</DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
-          <div className="min-w-0 flex-1 break-all font-mono text-xs text-foreground/90">{url}</div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label={copied ? t("copied") : t("copy")}
-            onClick={() => void handleCopy()}
-          >
-            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-          </Button>
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">{t("linkAddress")}</p>
+          <div className="flex items-center gap-2">
+            <Input readOnly value={url} className="font-mono" />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={copied ? t("copied") : t("copy")}
+              onClick={() => void handleCopy()}
+            >
+              {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+            </Button>
+          </div>
         </div>
 
         <DialogFooter>
-          <div className="flex items-center justify-end gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-              {common("cancel")}
-            </Button>
-            <Button type="button" size="sm" onClick={onConfirm}>
-              {common("open")}
-            </Button>
-          </div>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            {common("cancel")}
+          </Button>
+          <Button type="button" onClick={onConfirm}>
+            {common("open")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -624,9 +636,10 @@ export function CollapsibleCodePre({ children }: CollapsiblePreProps) {
   const codeContent = childElement ? getCodeTextFromChild(childElement) : "";
   const lineCount = getLineCount(codeContent);
   const language = childElement ? getCodeLanguage(childElement.props.className) : "";
+  const mermaid = isMermaidLanguage(language);
   const artifactPreviewable = Boolean(resolveArtifactPreviewKind(language, codeContent));
   const isCollapsible =
-    childElement != null && language !== "mermaid" && lineCount > CODE_BLOCK_COLLAPSE_LINE_THRESHOLD;
+    childElement != null && !mermaid && lineCount > CODE_BLOCK_COLLAPSE_LINE_THRESHOLD;
   const [expanded, setExpanded] = React.useState(false);
   const [isToggleHovered, setIsToggleHovered] = React.useState(false);
 
@@ -639,7 +652,7 @@ export function CollapsibleCodePre({ children }: CollapsiblePreProps) {
   if (!isCollapsible) {
     return (
       <div className="relative w-full">
-        <CodeBlockActions code={codeContent} language={language} previewable={artifactPreviewable} />
+        {!mermaid ? <CodeBlockActions code={codeContent} language={language} previewable={artifactPreviewable} /> : null}
         {codeBlock}
       </div>
     );
