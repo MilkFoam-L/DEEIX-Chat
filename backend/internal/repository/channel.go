@@ -382,4 +382,5 @@ type ChannelRepository interface {
 	GetRateLimitDefaults(ctx context.Context) (domainchannel.RateLimitDefaults, error)
 	DeleteUpstreamCascade(ctx context.Context, upstreamID uint) error
 	DeleteModelCascade(ctx context.Context, modelID uint) error
+	DeleteModelsWithoutSources(ctx context.Context) (int64, error)
 }

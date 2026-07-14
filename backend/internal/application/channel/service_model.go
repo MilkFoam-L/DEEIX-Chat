@@ -525,6 +525,18 @@ func (s *Service) DeleteModel(ctx context.Context, modelID uint) error {
 	return nil
 }
 
+// DeleteModelsWithoutSources 删除所有没有上游路由来源的平台模型。
+func (s *Service) DeleteModelsWithoutSources(ctx context.Context) (int64, error) {
+	deletedCount, err := s.repo.DeleteModelsWithoutSources(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if deletedCount > 0 {
+		s.InvalidateModelCatalog()
+	}
+	return deletedCount, nil
+}
+
 // BatchDeleteModels 批量删除模型，逐项返回结果。
 func (s *Service) BatchDeleteModels(ctx context.Context, modelIDs []uint) *BatchDeleteData {
 	result := &BatchDeleteData{

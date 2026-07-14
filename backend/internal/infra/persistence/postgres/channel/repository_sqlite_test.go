@@ -3,6 +3,8 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"testing"
@@ -585,6 +587,153 @@ func TestDeleteModelCascadeRemovesManualPermissionGroupAccess(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("expected model permission group access to be deleted, got %d", count)
+	}
+}
+
+func TestDeleteModelsWithoutSourcesRemovesOnlyOrphanedModels(t *testing.T) {
+	db := openChannelSQLiteTestDB(t)
+	ctx := context.Background()
+
+	group := model.PermissionGroup{Name: "default", IsDefault: true}
+	if err := db.Create(&group).Error; err != nil {
+		t.Fatalf("create permission group: %v", err)
+	}
+	upstream := model.LLMUpstream{Name: "openai", Status: "active"}
+	if err := db.Create(&upstream).Error; err != nil {
+		t.Fatalf("create upstream: %v", err)
+	}
+	upstreamModel := model.LLMUpstreamModel{
+		UpstreamID:        upstream.ID,
+		BindingCode:       "upm-routed",
+		UpstreamModelName: "gpt-routed",
+		Status:            "active",
+	}
+	if err := db.Create(&upstreamModel).Error; err != nil {
+		t.Fatalf("create upstream model: %v", err)
+	}
+	platformModels := []model.LLMPlatformModel{
+		{Name: "orphan-model", Vendor: "openai", Status: "active"},
+		{Name: "routed-model", Vendor: "openai", Status: "active"},
+	}
+	if err := db.Create(&platformModels).Error; err != nil {
+		t.Fatalf("create platform models: %v", err)
+	}
+	if err := db.Create(&model.LLMPlatformModelRoute{
+		PlatformModelID: platformModels[1].ID,
+		UpstreamModelID: upstreamModel.ID,
+		Protocol:        "openai_responses",
+		Status:          "active",
+	}).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	accesses := []model.PermissionGroupModelAccess{
+		{GroupID: group.ID, PlatformModelID: platformModels[0].ID},
+		{GroupID: group.ID, PlatformModelID: platformModels[1].ID},
+	}
+	if err := db.Create(&accesses).Error; err != nil {
+		t.Fatalf("create model accesses: %v", err)
+	}
+
+	deletedCount, err := NewRepo(db).DeleteModelsWithoutSources(ctx)
+	if err != nil {
+		t.Fatalf("DeleteModelsWithoutSources() error = %v", err)
+	}
+	if deletedCount != 1 {
+		t.Fatalf("expected one deleted model, got %d", deletedCount)
+	}
+
+	var remainingModels []model.LLMPlatformModel
+	if err := db.Order("id ASC").Find(&remainingModels).Error; err != nil {
+		t.Fatalf("list remaining models: %v", err)
+	}
+	if len(remainingModels) != 1 || remainingModels[0].ID != platformModels[1].ID {
+		t.Fatalf("expected only routed model to remain, got %#v", remainingModels)
+	}
+
+	var remainingAccesses []model.PermissionGroupModelAccess
+	if err := db.Order("platform_model_id ASC").Find(&remainingAccesses).Error; err != nil {
+		t.Fatalf("list remaining model accesses: %v", err)
+	}
+	if len(remainingAccesses) != 1 || remainingAccesses[0].PlatformModelID != platformModels[1].ID {
+		t.Fatalf("expected only routed model access to remain, got %#v", remainingAccesses)
+	}
+
+	var routeCount int64
+	if err := db.Model(&model.LLMPlatformModelRoute{}).
+		Where("platform_model_id = ?", platformModels[1].ID).
+		Count(&routeCount).Error; err != nil {
+		t.Fatalf("count routed model routes: %v", err)
+	}
+	if routeCount != 1 {
+		t.Fatalf("expected routed model route to remain, got %d", routeCount)
+	}
+}
+
+func TestDeleteModelsWithoutSourcesReturnsZeroWhenEveryModelHasSources(t *testing.T) {
+	db := openChannelSQLiteTestDB(t)
+	ctx := context.Background()
+	upstreamModel := createActiveRouteTarget(t, db)
+	platformModel := model.LLMPlatformModel{Name: "routed-model", Vendor: "openai", Status: "active"}
+	if err := db.Create(&platformModel).Error; err != nil {
+		t.Fatalf("create platform model: %v", err)
+	}
+	createActiveRoutes(t, db, upstreamModel.ID, platformModel)
+
+	deletedCount, err := NewRepo(db).DeleteModelsWithoutSources(ctx)
+	if err != nil {
+		t.Fatalf("DeleteModelsWithoutSources() error = %v", err)
+	}
+	if deletedCount != 0 {
+		t.Fatalf("expected zero deleted models, got %d", deletedCount)
+	}
+}
+
+func TestDeleteModelsWithoutSourcesHandlesMoreThanOneSQLParameterBatch(t *testing.T) {
+	db := openChannelSQLiteTestDB(t)
+	ctx := context.Background()
+	platformModels := make([]model.LLMPlatformModel, 1100)
+	for index := range platformModels {
+		platformModels[index] = model.LLMPlatformModel{
+			Name:   fmt.Sprintf("orphan-model-%04d", index),
+			Vendor: "openai",
+			Status: "active",
+		}
+	}
+	if err := db.CreateInBatches(&platformModels, 100).Error; err != nil {
+		t.Fatalf("create platform models: %v", err)
+	}
+
+	deletedCount, err := NewRepo(db).DeleteModelsWithoutSources(ctx)
+	if err != nil {
+		t.Fatalf("DeleteModelsWithoutSources() error = %v", err)
+	}
+	if deletedCount != int64(len(platformModels)) {
+		t.Fatalf("expected %d deleted models, got %d", len(platformModels), deletedCount)
+	}
+}
+
+func TestUpsertPlatformModelRouteRejectsMissingPlatformModel(t *testing.T) {
+	db := openChannelSQLiteTestDB(t)
+	ctx := context.Background()
+	upstreamModel := createActiveRouteTarget(t, db)
+	route := domainchannel.PlatformModelRoute{
+		PlatformModelID: 999999,
+		UpstreamModelID: upstreamModel.ID,
+		Protocol:        "openai_responses",
+		Status:          "active",
+	}
+
+	err := NewRepo(db).UpsertPlatformModelRoute(ctx, &route)
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected missing platform model error, got %v", err)
+	}
+
+	var routeCount int64
+	if err := db.Model(&model.LLMPlatformModelRoute{}).Count(&routeCount).Error; err != nil {
+		t.Fatalf("count routes: %v", err)
+	}
+	if routeCount != 0 {
+		t.Fatalf("expected no orphan routes, got %d", routeCount)
 	}
 }
 

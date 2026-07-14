@@ -13,6 +13,7 @@ import (
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/models"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // translateError 将 gorm 底层错误统一映射为仓储语义错误。
@@ -997,45 +998,55 @@ func (r *Repo) UpsertPlatformModelRoute(ctx context.Context, item *domainchannel
 		return repository.ErrInvalidInput
 	}
 	entity := toPlatformModelRouteModel(item)
-	var existing model.LLMPlatformModelRoute
-	query := r.db.WithContext(ctx).
-		Where(
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var platformModel model.LLMPlatformModel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id").
+			Where("id = ?", entity.PlatformModelID).
+			First(&platformModel).Error; err != nil {
+			return err
+		}
+
+		var existing model.LLMPlatformModelRoute
+		query := tx.Where(
 			"platform_model_id = ? AND upstream_model_id = ? AND protocol = ?",
 			entity.PlatformModelID,
 			entity.UpstreamModelID,
 			entity.Protocol,
 		).
-		Limit(1).
-		Find(&existing)
-	if query.Error != nil {
-		return translateError(query.Error)
-	}
-	if query.RowsAffected == 0 {
-		if err := r.db.WithContext(ctx).Create(&entity).Error; err != nil {
-			return translateError(err)
+			Limit(1).
+			Find(&existing)
+		if query.Error != nil {
+			return query.Error
+		}
+		if query.RowsAffected == 0 {
+			if err := tx.Create(&entity).Error; err != nil {
+				return err
+			}
+			*item = toPlatformModelRouteDomain(entity)
+			return nil
+		}
+
+		entity.ID = existing.ID
+		if err := tx.Model(&model.LLMPlatformModelRoute{}).
+			Where("id = ?", existing.ID).
+			Updates(map[string]interface{}{
+				"protocol":             entity.Protocol,
+				"status":               entity.Status,
+				"priority":             entity.Priority,
+				"weight":               entity.Weight,
+				"source":               entity.Source,
+				"cb_failure_threshold": entity.CbFailureThreshold,
+				"cb_duration_min":      entity.CbDurationMin,
+				"cb_window_min":        entity.CbWindowMin,
+				"headers_json":         entity.HeadersJSON,
+			}).Error; err != nil {
+			return err
 		}
 		*item = toPlatformModelRouteDomain(entity)
 		return nil
-	}
-	entity.ID = existing.ID
-	if err := r.db.WithContext(ctx).
-		Model(&model.LLMPlatformModelRoute{}).
-		Where("id = ?", existing.ID).
-		Updates(map[string]interface{}{
-			"protocol":             entity.Protocol,
-			"status":               entity.Status,
-			"priority":             entity.Priority,
-			"weight":               entity.Weight,
-			"source":               entity.Source,
-			"cb_failure_threshold": entity.CbFailureThreshold,
-			"cb_duration_min":      entity.CbDurationMin,
-			"cb_window_min":        entity.CbWindowMin,
-			"headers_json":         entity.HeadersJSON,
-		}).Error; err != nil {
-		return translateError(err)
-	}
-	*item = toPlatformModelRouteDomain(entity)
-	return nil
+	})
+	return translateError(err)
 }
 
 // ListPlatformModelRoutesByPair 查询同一平台模型和同一上游真实模型之间的全部协议绑定。
@@ -1472,6 +1483,62 @@ func (r *Repo) DeleteModelCascade(ctx context.Context, modelID uint) error {
 		}
 		return nil
 	}))
+}
+
+// DeleteModelsWithoutSources 硬删除所有没有路由绑定的平台模型及其手动权限组关联。
+func (r *Repo) DeleteModelsWithoutSources(ctx context.Context) (int64, error) {
+	const deleteBatchSize = 500
+
+	var deletedCount int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for {
+			routeExists := tx.Model(&model.LLMPlatformModelRoute{}).
+				Select("1").
+				Where("llm_model_routes.platform_model_id = llm_platform_models.id")
+
+			var candidates []model.LLMPlatformModel
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Select("id").
+				Where("NOT EXISTS (?)", routeExists).
+				Order("id ASC").
+				Limit(deleteBatchSize).
+				Find(&candidates).Error; err != nil {
+				return err
+			}
+			if len(candidates) == 0 {
+				return nil
+			}
+
+			candidateIDs := make([]uint, 0, len(candidates))
+			for _, item := range candidates {
+				candidateIDs = append(candidateIDs, item.ID)
+			}
+			var deletedItems []model.LLMPlatformModel
+			result := tx.Clauses(clause.Returning{Columns: []clause.Column{{Name: "id"}}}).
+				Where("id IN ? AND NOT EXISTS (?)", candidateIDs, routeExists).
+				Delete(&deletedItems)
+			if result.Error != nil {
+				return result.Error
+			}
+			if len(deletedItems) == 0 {
+				return repository.ErrConflict
+			}
+
+			deletedIDs := make([]uint, 0, len(deletedItems))
+			for _, item := range deletedItems {
+				deletedIDs = append(deletedIDs, item.ID)
+			}
+			if err := tx.Where("platform_model_id IN ?", deletedIDs).
+				Delete(&model.PermissionGroupModelAccess{}).Error; err != nil {
+				return err
+			}
+			deletedCount += int64(len(deletedIDs))
+		}
+	})
+	if err != nil {
+		return 0, translateError(err)
+	}
+	return deletedCount, nil
 }
 
 func toUpstreamDomain(item model.LLMUpstream) domainchannel.Upstream {

@@ -2,13 +2,46 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	domainchannel "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/channel"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/cache/memory"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 )
+
+func TestDeleteModelsWithoutSourcesReturnsDeletedCountAndInvalidatesCatalog(t *testing.T) {
+	repo := &modelUpdateRepo{deleteWithoutSourcesCount: 2}
+	service := NewService(config.Config{}, repo, nil, nil)
+	service.modelCatalog = []ModelView{{ID: 1}}
+	service.modelCatalogValidUntil = time.Now().Add(time.Minute)
+
+	deletedCount, err := service.DeleteModelsWithoutSources(context.Background())
+	if err != nil {
+		t.Fatalf("DeleteModelsWithoutSources() error = %v", err)
+	}
+	if deletedCount != 2 {
+		t.Fatalf("expected two deleted models, got %d", deletedCount)
+	}
+	if service.modelCatalog != nil || !service.modelCatalogValidUntil.IsZero() {
+		t.Fatal("expected model catalog to be invalidated")
+	}
+}
+
+func TestDeleteModelsWithoutSourcesPropagatesRepositoryError(t *testing.T) {
+	expectedErr := errors.New("delete failed")
+	service := NewService(config.Config{}, &modelUpdateRepo{deleteWithoutSourcesErr: expectedErr}, nil, nil)
+
+	deletedCount, err := service.DeleteModelsWithoutSources(context.Background())
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected repository error, got %v", err)
+	}
+	if deletedCount != 0 {
+		t.Fatalf("expected zero deleted models on error, got %d", deletedCount)
+	}
+}
 
 func TestUpdateModelResetsIconToAutoWhenExplicitlyEmpty(t *testing.T) {
 	repo := &modelUpdateRepo{
@@ -169,14 +202,16 @@ func TestListUpstreamsNormalizesCircuitOpenModelCount(t *testing.T) {
 }
 
 type modelUpdateRepo struct {
-	model              domainchannel.PlatformModel
-	modelRows          []repository.ChannelModelListRow
-	upstreamRows       []repository.ChannelUpstreamListRow
-	activeBindingCodes []string
-	source             repository.ChannelModelSourceRow
-	sources            []repository.ChannelModelSourceRow
-	lastUpdate         repository.UpdateChannelModelInput
-	lastRouteUpdate    repository.UpdateChannelPlatformRouteInput
+	model                     domainchannel.PlatformModel
+	modelRows                 []repository.ChannelModelListRow
+	upstreamRows              []repository.ChannelUpstreamListRow
+	activeBindingCodes        []string
+	source                    repository.ChannelModelSourceRow
+	sources                   []repository.ChannelModelSourceRow
+	lastUpdate                repository.UpdateChannelModelInput
+	lastRouteUpdate           repository.UpdateChannelPlatformRouteInput
+	deleteWithoutSourcesCount int64
+	deleteWithoutSourcesErr   error
 }
 
 func (r *modelUpdateRepo) CreateUpstream(context.Context, *domainchannel.Upstream) error {
@@ -405,6 +440,10 @@ func (r *modelUpdateRepo) DeleteUpstreamCascade(context.Context, uint) error {
 
 func (r *modelUpdateRepo) DeleteModelCascade(context.Context, uint) error {
 	return nil
+}
+
+func (r *modelUpdateRepo) DeleteModelsWithoutSources(context.Context) (int64, error) {
+	return r.deleteWithoutSourcesCount, r.deleteWithoutSourcesErr
 }
 
 var _ repository.ChannelRepository = (*modelUpdateRepo)(nil)

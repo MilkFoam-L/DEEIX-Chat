@@ -1153,6 +1153,25 @@ func (h *Handler) BatchDeleteModels(c *gin.Context) {
 	response.Success(c, toBatchDeleteResponse(*h.service.BatchDeleteModels(c.Request.Context(), req.IDs)))
 }
 
+// DeleteModelsWithoutSources godoc
+// @Summary 管理员删除所有无上游模型
+// @Description 管理员删除所有没有任何上游路由绑定的平台模型及其模型级权限组关联
+// @Tags llm
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} DeleteModelsWithoutSourcesResponseDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /admin/llm/models/delete-without-sources [post]
+func (h *Handler) DeleteModelsWithoutSources(c *gin.Context) {
+	deletedCount, err := h.service.DeleteModelsWithoutSources(c.Request.Context())
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "delete models without sources failed")
+		return
+	}
+	response.Success(c, DeleteModelsWithoutSourcesResponse{DeletedCount: deletedCount})
+}
+
 // TestModel godoc
 // @Summary 管理员测试平台模型路由
 // @Description 按平台模型当前活跃路由选择一个来源执行轻量连通性测试；返回结果内的调试信息已脱敏且不包含 Base URL 或密钥

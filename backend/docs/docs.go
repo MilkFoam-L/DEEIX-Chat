@@ -1414,6 +1414,40 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/llm/models/delete-without-sources": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "管理员删除所有没有任何上游路由绑定的平台模型及其模型级权限组关联",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "llm"
+                ],
+                "summary": "管理员删除所有无上游模型",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_channel.DeleteModelsWithoutSourcesResponseDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_channel.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/llm/models/order": {
             "post": {
                 "security": [
@@ -14420,6 +14454,25 @@ const docTemplate = `{
             "properties": {
                 "data": {
                     "$ref": "#/definitions/internal_transport_http_channel.UpstreamDataResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_channel.DeleteModelsWithoutSourcesResponse": {
+            "type": "object",
+            "properties": {
+                "deletedCount": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_transport_http_channel.DeleteModelsWithoutSourcesResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_channel.DeleteModelsWithoutSourcesResponse"
                 },
                 "errorMsg": {
                     "type": "string"

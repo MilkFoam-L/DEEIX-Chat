@@ -384,6 +384,10 @@ export type AdminLLMModelUpstreamSourceData = {
 export type AdminLLMModelProbeData = AdminLLMModelProbeResult;
 export type AdminLLMModelProbeBatchData = AdminLLMModelProbeBatchResult;
 
+export type DeleteAdminLLMModelsWithoutSourcesData = {
+  deletedCount: number;
+};
+
 export type ResetAdminLLMCircuitData = {
   reset: boolean;
 };

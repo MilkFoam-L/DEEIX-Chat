@@ -39,6 +39,7 @@ func (m *Module) RegisterAdminRoutes(adminGroup *gin.RouterGroup) {
 	adminGroup.POST("/llm/models", m.Handler.CreateModel)
 	adminGroup.POST("/llm/models/order", m.Handler.ReorderModels)
 	adminGroup.POST("/llm/models/batch-delete", m.Handler.BatchDeleteModels)
+	adminGroup.POST("/llm/models/delete-without-sources", m.Handler.DeleteModelsWithoutSources)
 	adminGroup.PATCH("/llm/models/:id", m.Handler.UpdateModel)
 	adminGroup.DELETE("/llm/models/:id", m.Handler.DeleteModel)
 	adminGroup.POST("/llm/models/:id/test", m.Handler.TestModel)

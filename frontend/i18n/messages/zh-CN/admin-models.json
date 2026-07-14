@@ -54,6 +54,7 @@
   "actions": {
     "create": "新增",
     "displayOrder": "顺序",
+    "deleteWithoutSources": "删除无上游",
     "apply": "应用",
     "bulkDelete": "删除",
     "test": "测试",
@@ -111,6 +112,12 @@
     "bulkConfirm": "确认删除",
     "remaining": "其余项目",
     "batchSummary": "已删除 {success} 个，未找到 {notFound} 个，失败 {failed} 个"
+  },
+  "deleteWithoutSourcesDialog": {
+    "title": "删除所有无上游模型",
+    "description": "将删除所有没有任何上游来源的平台模型及其权限组关联。此操作不可撤销。",
+    "confirm": "确认删除",
+    "deleting": "删除中"
   },
   "bulkConfirm": {
     "title": "确认批量修改",
@@ -198,6 +205,9 @@
     "bulkDeletePartialFailed": "批量删除模型部分失败",
     "bulkDeleteCompleted": "批量删除模型完成",
     "bulkDeleteFailed": "批量删除模型失败",
+    "modelsWithoutSourcesDeleted": "已删除 {count} 个无上游模型",
+    "noModelsWithoutSources": "没有需要删除的无上游模型",
+    "modelsWithoutSourcesDeleteFailed": "删除无上游模型失败",
     "bulkPartialDescription": "成功 {success} 个，失败 {failed} 个。",
     "bulkKindsAlreadyApplied": "所选模型已是该类型",
     "bulkKindsUpdated": "已更新 {count} 个模型类型",

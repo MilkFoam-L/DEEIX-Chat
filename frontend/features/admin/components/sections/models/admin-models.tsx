@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
-import { Building2, Cable, Check, ChevronDownIcon, ListOrdered, Plus, Tags, ToggleLeft, Trash2 } from "lucide-react";
+import { Building2, Cable, Check, ChevronDownIcon, ListOrdered, Plus, Tags, ToggleLeft, Trash2, Unplug } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
@@ -28,7 +28,11 @@ import {
   testAdminLLMUpstreamModelRoute,
 } from "@/features/admin/api";
 import { useAdminModels } from "@/features/admin/hooks/use-admin-models";
-import { BulkDeleteModelsDialog, DeleteModelDialog } from "./models-dialog";
+import {
+  BulkDeleteModelsDialog,
+  DeleteModelDialog,
+  DeleteModelsWithoutSourcesDialog,
+} from "./models-dialog";
 import { ModelProbeDialog } from "./models-probe-dialog";
 import { ModelsTable } from "./models-table";
 import {
@@ -175,6 +179,7 @@ export function AdminModelsPage() {
   const models = useAdminModels();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [orderOpen, setOrderOpen] = React.useState(false);
+  const [deleteWithoutSourcesOpen, setDeleteWithoutSourcesOpen] = React.useState(false);
   const [bulkConfirmAction, setBulkConfirmAction] = React.useState<ModelBulkAction | null>(null);
   const [probeOpen, setProbeOpen] = React.useState(false);
   const [probeLoading, setProbeLoading] = React.useState(false);
@@ -411,6 +416,17 @@ export function AdminModelsPage() {
             type="button"
             size="sm"
             variant="outline"
+            className="h-7 gap-1 text-xs text-destructive hover:text-destructive"
+            onClick={() => setDeleteWithoutSourcesOpen(true)}
+            disabled={models.loading}
+          >
+            <Unplug className="size-3.5 stroke-1" />
+            {t("actions.deleteWithoutSources")}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
             className="h-7 gap-1 text-xs"
             onClick={() => setOrderOpen(true)}
             disabled={models.loading}
@@ -497,6 +513,15 @@ export function AdminModelsPage() {
         targets={models.bulkDeleteTargets}
         onClose={models.closeBulkDelete}
         onDeleted={models.handleBulkDeleted}
+      />
+
+      <DeleteModelsWithoutSourcesDialog
+        open={deleteWithoutSourcesOpen}
+        onClose={() => setDeleteWithoutSourcesOpen(false)}
+        onDeleted={() => {
+          setDeleteWithoutSourcesOpen(false);
+          void models.loadModels(1, models.pageSize);
+        }}
       />
 
       {models.sourcesModel ? (

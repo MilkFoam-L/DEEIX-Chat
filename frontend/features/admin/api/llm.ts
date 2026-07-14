@@ -18,6 +18,7 @@ import type {
   BindAdminLLMModelUpstreamSourceRequest,
   CreateAdminLLMModelRequest,
   CreateAdminLLMUpstreamRequest,
+  DeleteAdminLLMModelsWithoutSourcesData,
   ImportAdminLLMUpstreamModelsData,
   ImportAdminLLMUpstreamModelsRequest,
   ListAdminLLMRemoteModelsData,
@@ -394,6 +395,16 @@ export async function batchDeleteAdminLLMModels(
   return authedRequest<AdminBatchDeleteData>(
     "/api/v1/admin/llm/models/batch-delete",
     { method: "POST", accessToken, body: payload },
+    true,
+  );
+}
+
+export async function deleteAdminLLMModelsWithoutSources(
+  accessToken: string,
+): Promise<DeleteAdminLLMModelsWithoutSourcesData> {
+  return authedRequest<DeleteAdminLLMModelsWithoutSourcesData>(
+    "/api/v1/admin/llm/models/delete-without-sources",
+    { method: "POST", accessToken },
     true,
   );
 }

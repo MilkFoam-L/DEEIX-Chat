@@ -590,6 +590,11 @@ func toBatchDeleteResponse(d appchannel.BatchDeleteData) BatchDeleteResponse {
 	}
 }
 
+// DeleteModelsWithoutSourcesResponse 无上游模型清理响应 DTO。
+type DeleteModelsWithoutSourcesResponse struct {
+	DeletedCount int64 `json:"deletedCount"`
+}
+
 // CircuitResetResponse 熔断重置响应 DTO。
 type CircuitResetResponse struct {
 	Reset bool `json:"reset"`
@@ -681,6 +686,12 @@ type PublicModelListResponseDoc struct {
 type BatchDeleteResponseDoc struct {
 	ErrorMsg string              `json:"errorMsg"`
 	Data     BatchDeleteResponse `json:"data"`
+}
+
+// DeleteModelsWithoutSourcesResponseDoc 无上游模型清理响应文档。
+type DeleteModelsWithoutSourcesResponseDoc struct {
+	ErrorMsg string                             `json:"errorMsg"`
+	Data     DeleteModelsWithoutSourcesResponse `json:"data"`
 }
 
 // CreateUpstreamResponseDoc 创建上游响应文档。

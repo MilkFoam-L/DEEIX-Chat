@@ -54,6 +54,7 @@
   "actions": {
     "create": "Create",
     "displayOrder": "Order",
+    "deleteWithoutSources": "Delete unrouted",
     "apply": "Apply",
     "bulkDelete": "Delete",
     "test": "Test",
@@ -111,6 +112,12 @@
     "bulkConfirm": "Delete",
     "remaining": "More items",
     "batchSummary": "Deleted {success}, not found {notFound}, failed {failed}"
+  },
+  "deleteWithoutSourcesDialog": {
+    "title": "Delete all unrouted models",
+    "description": "Delete every platform model without an upstream source and remove its permission-group associations. This action cannot be undone.",
+    "confirm": "Delete",
+    "deleting": "Deleting"
   },
   "bulkConfirm": {
     "title": "Confirm bulk update",
@@ -198,6 +205,9 @@
     "bulkDeletePartialFailed": "Some models could not be deleted",
     "bulkDeleteCompleted": "Models deleted",
     "bulkDeleteFailed": "Could not delete selected models",
+    "modelsWithoutSourcesDeleted": "Deleted {count} unrouted models",
+    "noModelsWithoutSources": "No unrouted models to delete",
+    "modelsWithoutSourcesDeleteFailed": "Could not delete unrouted models",
     "bulkPartialDescription": "Succeeded {success}, failed {failed}.",
     "bulkKindsAlreadyApplied": "Selected models already use this type",
     "bulkKindsUpdated": "Updated {count} model types",

@@ -24,6 +24,7 @@ import {
 import {
   batchDeleteAdminLLMModels,
   deleteAdminLLMModel,
+  deleteAdminLLMModelsWithoutSources,
 } from "@/features/admin/api";
 import type {
   AdminBatchDeleteData,
@@ -194,6 +195,80 @@ export function BulkDeleteModelsDialog({
             disabled={pending || targets.length === 0}
           >
             {pending ? <SpinnerLabel>{t("deleteDialog.deleting")}</SpinnerLabel> : t("deleteDialog.bulkConfirm")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+type DeleteModelsWithoutSourcesDialogProps = {
+  open: boolean;
+  onClose: () => void;
+  onDeleted: (deletedCount: number) => void;
+};
+
+export function DeleteModelsWithoutSourcesDialog({
+  open,
+  onClose,
+  onDeleted,
+}: DeleteModelsWithoutSourcesDialogProps) {
+  const t = useTranslations("adminModels");
+  const commonT = useTranslations("common");
+  const [pending, setPending] = React.useState(false);
+  const pendingRef = React.useRef(false);
+
+  const handleDelete = React.useCallback(async () => {
+    if (pendingRef.current) {
+      return;
+    }
+    pendingRef.current = true;
+    setPending(true);
+    try {
+      const token = await resolveAccessToken();
+      if (!token) {
+        toast.error(t("toast.sessionExpired"), { description: t("toast.signInAgain") });
+        return;
+      }
+      const result = await deleteAdminLLMModelsWithoutSources(token);
+      if (result.deletedCount > 0) {
+        toast.success(t("toast.modelsWithoutSourcesDeleted", { count: result.deletedCount }));
+      } else {
+        toast.info(t("toast.noModelsWithoutSources"));
+      }
+      onDeleted(result.deletedCount);
+    } catch (error) {
+      toast.error(t("toast.modelsWithoutSourcesDeleteFailed"), {
+        description: resolveAdminErrorMessage(error),
+      });
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }, [onDeleted, t]);
+
+  return (
+    <AlertDialog open={open} onOpenChange={(nextOpen) => !nextOpen && !pending && onClose()}>
+      <AlertDialogContent className="sm:max-w-[440px]">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("deleteWithoutSourcesDialog.title")}</AlertDialogTitle>
+          <AlertDialogDescription>{t("deleteWithoutSourcesDialog.description")}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>{commonT("actions.cancel")}</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            onClick={(event) => {
+              event.preventDefault();
+              void handleDelete();
+            }}
+            disabled={pending}
+          >
+            {pending ? (
+              <SpinnerLabel>{t("deleteWithoutSourcesDialog.deleting")}</SpinnerLabel>
+            ) : (
+              t("deleteWithoutSourcesDialog.confirm")
+            )}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
