@@ -47,6 +47,7 @@ type Service struct {
 	logger               *zap.Logger
 	storeProvider        appstorage.Provider
 	auditWriter          auditWriter
+	avatarFileValidator  avatarFileValidator
 }
 
 type subscriptionResolver interface {
@@ -59,6 +60,10 @@ type subscriptionResolver interface {
 
 type auditWriter interface {
 	Write(ctx context.Context, requestID string, actorUserID uint, action string, resource string, resourceID string, ip string, userAgent string, detail interface{})
+}
+
+type avatarFileValidator interface {
+	ValidateImageFile(ctx context.Context, userID uint, fileID string) error
 }
 
 // NewService 创建服务。
@@ -108,6 +113,11 @@ func (s *Service) SetObjectStoreProvider(provider appstorage.Provider) {
 	}
 }
 
+// SetAvatarFileValidator 注入头像文件校验能力。
+func (s *Service) SetAvatarFileValidator(validator avatarFileValidator) {
+	s.avatarFileValidator = validator
+}
+
 // ShouldUseSecureCookies 判断当前运行环境是否必须写入 Secure Cookie。
 func (s *Service) ShouldUseSecureCookies() bool {
 	if s == nil || s.cfg == nil {
@@ -132,6 +142,12 @@ type AuditInput struct {
 	ClientIP   string
 	UserAgent  string
 	Detail     interface{}
+}
+
+// BootstrapSuperAdmin 表示首次启动时自动创建的超级管理员凭据。
+type BootstrapSuperAdmin struct {
+	Username string
+	Password string
 }
 
 // RecordAudit 记录认证域审计日志。
@@ -159,31 +175,24 @@ func (s *Service) warn(message string, fields ...zap.Field) {
 	s.logger.Warn(message, fields...)
 }
 
-func (s *Service) info(message string, fields ...zap.Field) {
-	if s.logger == nil {
-		return
-	}
-	s.logger.Info(message, fields...)
-}
-
 // EnsureBootstrapSuperAdmin 确保系统至少存在一个 superadmin。
-func (s *Service) EnsureBootstrapSuperAdmin(ctx context.Context) error {
+func (s *Service) EnsureBootstrapSuperAdmin(ctx context.Context) (*BootstrapSuperAdmin, error) {
 	count, err := s.repo.CountSuperAdmins(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if count > 0 {
-		return s.repo.MarkBootstrapSuperAdminPasswordResetRequired(ctx, s.cfg.Snapshot().AdminUsername)
+		return nil, s.repo.MarkBootstrapSuperAdminPasswordResetRequired(ctx, s.cfg.Snapshot().AdminUsername)
 	}
 
 	cfg := s.cfg.Snapshot()
 	bootstrapPassword, err := generateBootstrapAdminPassword()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(bootstrapPassword), passwordHashCost)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	now := time.Now()
 
@@ -213,10 +222,9 @@ func (s *Service) EnsureBootstrapSuperAdmin(ctx context.Context) error {
 		PasswordOrigin:    domainuser.PasswordOriginAdminCreated,
 		MustResetPassword: true,
 	}, 0, 0, nil, false); err != nil {
-		return err
+		return nil, err
 	}
-	s.info("bootstrap superadmin created", zap.String("username", username), zap.String("password", bootstrapPassword))
-	return nil
+	return &BootstrapSuperAdmin{Username: username, Password: bootstrapPassword}, nil
 }
 
 func generateBootstrapAdminPassword() (string, error) {
@@ -519,16 +527,11 @@ func (s *Service) applyCredentialView(view *userview.UserView, item domainuser.U
 }
 
 func shouldRequireInitialUsername(item domainuser.User, adminUsername string) bool {
-	if item.UsernameChangedAt != nil {
-		return false
-	}
 	if item.Role == domainuser.RoleSuperAdmin {
-		return strings.EqualFold(strings.TrimSpace(item.Username), strings.TrimSpace(adminUsername))
+		return item.UsernameChangedAt == nil &&
+			strings.EqualFold(strings.TrimSpace(item.Username), strings.TrimSpace(adminUsername))
 	}
-	return item.Role == domainuser.RoleUser &&
-		(item.EmailSource == domainuser.EmailSourceLocalRegister ||
-			item.EmailSource == domainuser.EmailSourceProviderVerified ||
-			item.EmailSource == domainuser.EmailSourceProviderUnverified)
+	return false
 }
 
 func (s *Service) CompleteOnboarding(
@@ -546,9 +549,8 @@ func (s *Service) CompleteOnboarding(
 	if credentialErr != nil && !errors.Is(credentialErr, repository.ErrNotFound) {
 		return nil, false, credentialErr
 	}
-	cfg := s.cfg.Snapshot()
-	if shouldRequireInitialUsername(*item, cfg.AdminUsername) {
-		return nil, false, fmt.Errorf("username change required")
+	if shouldRequireInitialUsername(*item, s.cfg.Snapshot().AdminUsername) {
+		return nil, false, ErrUsernameChangeRequired
 	}
 	passwordChanged := false
 	if credential != nil && (credential.MustResetPassword || isBootstrapSuperAdminAdminCreatedPassword(*item, credential)) {
@@ -701,11 +703,21 @@ func sessionActivityInputFromSnapshot(snapshot sessionAuditSnapshot, lastSeenAt 
 // UpdateProfile 更新当前用户资料。
 func (s *Service) UpdateProfile(ctx context.Context, userID uint, input UpdateProfileInput) (*domainuser.User, error) {
 	updateInput := repository.UpdateUserFieldsInput{}
+	avatarFileReferenceRequested := false
 
 	if input.AvatarURL != nil {
 		nextAvatarURL := strings.TrimSpace(*input.AvatarURL)
 		if err := validateAvatarURL(nextAvatarURL); err != nil {
 			return nil, err
+		}
+		if fileID, ok := domainuser.ParseFileAvatarURL(nextAvatarURL); ok {
+			avatarFileReferenceRequested = true
+			if s.avatarFileValidator == nil {
+				return nil, ErrInvalidAvatarURL
+			}
+			if err := s.avatarFileValidator.ValidateImageFile(ctx, userID, fileID); err != nil {
+				return nil, ErrInvalidAvatarURL
+			}
 		}
 		updateInput.AvatarURL = &nextAvatarURL
 	}
@@ -746,7 +758,11 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uint, input UpdatePr
 		updateInput.AppearancePreferences = &normalizedAppearancePreferences
 	}
 
-	return s.repo.UpdateProfile(ctx, userID, updateInput)
+	item, err := s.repo.UpdateProfile(ctx, userID, updateInput)
+	if avatarFileReferenceRequested && errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrInvalidAvatarURL
+	}
+	return item, err
 }
 
 func normalizeAppearancePreferences(raw string) (string, error) {
@@ -825,7 +841,7 @@ func (s *Service) UpdateUsernameOnce(ctx context.Context, userID uint, input Upd
 	}
 	if shouldRequireInitialUsername(*current, s.cfg.Snapshot().AdminUsername) &&
 		strings.EqualFold(strings.TrimSpace(current.Username), username) {
-		return nil, ErrInvalidUsername
+		return nil, ErrUsernameChangeRequired
 	}
 	item, err := s.repo.UpdateUsernameOnce(ctx, userID, username, time.Now())
 	if errors.Is(err, repository.ErrDuplicateUsername) || errors.Is(err, repository.ErrDuplicate) {
@@ -1549,9 +1565,15 @@ func normalizeEditableUsername(raw string) (string, error) {
 	return username, nil
 }
 
-// validateAvatarURL 校验头像 URL 合法性；空值、相对路径和 generated: 前缀均视为合法。
+// validateAvatarURL 校验头像 URL 合法性；空值、相对路径、generated: 前缀和 file: 引用均视为合法。
 func validateAvatarURL(raw string) error {
 	if raw == "" || strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "generated:github:") {
+		return nil
+	}
+	if strings.HasPrefix(raw, "file:") {
+		if _, ok := domainuser.ParseFileAvatarURL(raw); !ok {
+			return ErrInvalidAvatarURL
+		}
 		return nil
 	}
 

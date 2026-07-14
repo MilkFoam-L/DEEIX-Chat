@@ -38,6 +38,63 @@ func TestBuildOpenAIResponsesMinimalRequestHasOnlyProtocolDefaults(t *testing.T)
 	}
 }
 
+func TestBuildOpenAIResponsesBackgroundRequestSetsStore(t *testing.T) {
+	payload := mustBuildRequestBody(t, AdapterOpenAIResponses, "gpt-5", EndpointResponses, GenerateInput{
+		Messages:            []Message{{Role: "user", Content: "hello"}},
+		ResponsesBackground: true,
+	}, true)
+
+	if payload["background"] != true || payload["store"] != true {
+		t.Fatalf("expected background store request, got %#v", payload)
+	}
+}
+
+func TestBuildOpenAIResponsesBackgroundIgnoresProviderOverride(t *testing.T) {
+	payload := mustBuildRequestBody(t, AdapterOpenAIResponses, "gpt-5", EndpointResponses, GenerateInput{
+		Messages:            []Message{{Role: "user", Content: "hello"}},
+		ResponsesBackground: true,
+		Options: map[string]interface{}{
+			"background": false,
+			"store":      false,
+		},
+	}, true)
+
+	if payload["background"] != true || payload["store"] != true {
+		t.Fatalf("expected internal background fields to win, got %#v", payload)
+	}
+}
+
+func TestOpenAIResponsesCreatedEventEmitsResponseID(t *testing.T) {
+	result := &GenerateOutput{}
+	var got string
+	err := applyResponsesStreamEvent(
+		AdapterOpenAIResponses,
+		"response.created",
+		map[string]interface{}{
+			"type": "response.created",
+			"response": map[string]interface{}{
+				"id":           "resp_123",
+				"service_tier": "default",
+			},
+		},
+		"",
+		result,
+		func(event GenerateStreamEvent) error {
+			got = event.ResponseID
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected event error: %v", err)
+	}
+	if got != "resp_123" || result.ResponseID != "resp_123" {
+		t.Fatalf("expected response id event and result, got event=%q result=%q", got, result.ResponseID)
+	}
+	if result.Usage.ServiceTier != "default" {
+		t.Fatalf("expected service tier to continue parsing, got %q", result.Usage.ServiceTier)
+	}
+}
+
 func TestBuildOpenAIResponsesUsesOutputTextForAssistantHistory(t *testing.T) {
 	payload := mustBuildRequestBody(t, AdapterOpenAIResponses, "gpt-5", EndpointResponses, GenerateInput{
 		Messages: []Message{
@@ -67,6 +124,38 @@ func TestBuildOpenAIResponsesUsesOutputTextForAssistantHistory(t *testing.T) {
 		if content[0]["type"] != expected {
 			t.Fatalf("expected content type %q at %d, got %#v", expected, i, content[0]["type"])
 		}
+	}
+}
+
+func TestBuildOpenRouterResponsesAddsRequiredHistoryMessageFields(t *testing.T) {
+	payload := mustBuildRequestBody(t, AdapterOpenRouterResponses, "openai/gpt-oss-120b:free", EndpointResponses, GenerateInput{
+		Messages: []Message{
+			{Role: "user", Content: "你好"},
+			{Role: "assistant", Content: "你好！有什么我可以帮忙的吗？"},
+			{Role: "user", Content: "你是谁？"},
+		},
+	}, true)
+
+	inputItems, ok := payload["input"].([]map[string]interface{})
+	if !ok || len(inputItems) != 3 {
+		t.Fatalf("expected three openrouter responses input items, got %#v", payload["input"])
+	}
+	if inputItems[0]["type"] != "message" || inputItems[0]["role"] != "user" {
+		t.Fatalf("expected user message item, got %#v", inputItems[0])
+	}
+	assistant := inputItems[1]
+	if assistant["type"] != "message" || assistant["role"] != "assistant" {
+		t.Fatalf("expected assistant message item, got %#v", assistant)
+	}
+	if assistant["id"] == "" || assistant["status"] != "completed" {
+		t.Fatalf("expected assistant id/status for openrouter history, got %#v", assistant)
+	}
+	content := assistant["content"].([]map[string]interface{})
+	if content[0]["type"] != "output_text" {
+		t.Fatalf("expected output_text content, got %#v", content[0])
+	}
+	if _, ok := payload["include"]; ok {
+		t.Fatalf("expected no openai-only default include for openrouter responses, got %#v", payload["include"])
 	}
 }
 
@@ -460,6 +549,30 @@ func TestBuildOpenAIResponsesNestedProviderOptionsMergeAndOfficialFields(t *test
 	}
 	if _, ok := streamOptions["include_usage"]; ok {
 		t.Fatalf("expected chat-only include_usage to be omitted for responses, got %#v", streamOptions)
+	}
+}
+
+func TestBuildOpenAIResponsesUsesManagedInstructions(t *testing.T) {
+	payload := mustBuildRequestBody(t, AdapterOpenAIResponses, "gpt-5", EndpointResponses, GenerateInput{
+		Messages:     []Message{{Role: "user", Content: "hello"}},
+		Instructions: "managed developer instructions",
+		Options: map[string]interface{}{
+			"instructions": "provider override",
+			"metadata":     map[string]interface{}{"trace": "ok"},
+			"prompt":       map[string]interface{}{"id": "pmpt_123"},
+		},
+	}, true)
+
+	if payload["instructions"] != "managed developer instructions" {
+		t.Fatalf("expected managed instructions, got %#v", payload["instructions"])
+	}
+	metadata, ok := payload["metadata"].(map[string]interface{})
+	if !ok || metadata["trace"] != "ok" {
+		t.Fatalf("expected metadata to remain available, got %#v", payload["metadata"])
+	}
+	prompt, ok := payload["prompt"].(map[string]interface{})
+	if !ok || prompt["id"] != "pmpt_123" {
+		t.Fatalf("expected prompt to remain available, got %#v", payload["prompt"])
 	}
 }
 

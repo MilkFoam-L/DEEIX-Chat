@@ -103,6 +103,136 @@ definitions:
       username:
         type: string
     type: object
+  internal_transport_http_admin.CleanupLogsRequest:
+    properties:
+      before:
+        type: string
+      type:
+        type: string
+    required:
+    - before
+    - type
+    type: object
+  internal_transport_http_admin.CleanupLogsResponse:
+    properties:
+      before:
+        type: string
+      deletedCount:
+        type: integer
+      type:
+        type: string
+    type: object
+  internal_transport_http_admin.CleanupLogsResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_admin.CleanupLogsResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_admin.ConversationEventListResponseDoc:
+    properties:
+      data:
+        properties:
+          results:
+            items:
+              $ref: '#/definitions/internal_transport_http_admin.ConversationEventResponse'
+            type: array
+          total:
+            type: integer
+        type: object
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_admin.ConversationEventResponse:
+    properties:
+      contentMarkdown:
+        type: string
+      conversationID:
+        type: integer
+      createdAt:
+        type: string
+      endedAt:
+        type: string
+      errorJSON:
+        type: string
+      eventID:
+        type: string
+      eventScope:
+        type: string
+      eventType:
+        type: string
+      id:
+        type: integer
+      inputJSON:
+        type: string
+      latencyMS:
+        type: integer
+      messageID:
+        type: integer
+      outputJSON:
+        type: string
+      parentEventID:
+        type: string
+      payloadJSON:
+        type: string
+      phase:
+        type: string
+      platformModelName:
+        type: string
+      providerProtocol:
+        type: string
+      roundID:
+        type: string
+      routedBindingCode:
+        type: string
+      runID:
+        type: string
+      seq:
+        type: integer
+      stage:
+        type: string
+      startedAt:
+        type: string
+      status:
+        type: string
+      summary:
+        type: string
+      title:
+        type: string
+      toolCallID:
+        type: string
+      toolName:
+        type: string
+      updatedAt:
+        type: string
+      upstreamModelName:
+        type: string
+      upstreamName:
+        type: string
+      userDisplayName:
+        type: string
+      userID:
+        type: integer
+      userLabel:
+        type: string
+      username:
+        type: string
+    type: object
+  internal_transport_http_admin.CreatePermissionGroupRequest:
+    properties:
+      description:
+        maxLength: 512
+        type: string
+      name:
+        maxLength: 128
+        type: string
+      rateMultiplierPercent:
+        maximum: 10000
+        minimum: 0
+        type: integer
+    required:
+    - name
+    type: object
   internal_transport_http_admin.CreateUserRequest:
     properties:
       avatarURL:
@@ -148,6 +278,20 @@ definitions:
       errorMsg:
         type: string
     type: object
+  internal_transport_http_admin.DeletePermissionGroupResponse:
+    properties:
+      deleted:
+        type: boolean
+      summary:
+        $ref: '#/definitions/internal_transport_http_admin.PermissionGroupDeleteSummaryResponse'
+    type: object
+  internal_transport_http_admin.DeletePermissionGroupResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_admin.DeletePermissionGroupResponse'
+      errorMsg:
+        type: string
+    type: object
   internal_transport_http_admin.DeleteUserResponse:
     properties:
       deleted:
@@ -169,6 +313,103 @@ definitions:
       errorMsg:
         type: string
       requestId:
+        type: string
+    type: object
+  internal_transport_http_admin.GroupModelsResponse:
+    properties:
+      modelIDs:
+        items:
+          type: integer
+        type: array
+      rules:
+        items:
+          $ref: '#/definitions/internal_transport_http_admin.PermissionGroupModelRuleResponse'
+        type: array
+    type: object
+  internal_transport_http_admin.GroupModelsResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_admin.GroupModelsResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_admin.GroupUsersResponse:
+    properties:
+      userIDs:
+        items:
+          type: integer
+        type: array
+    type: object
+  internal_transport_http_admin.GroupUsersResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_admin.GroupUsersResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_admin.ImportOpenWebUIUsersRequest:
+    properties:
+      creditMultiplier:
+        type: number
+      dryRun:
+        type: boolean
+      dsn:
+        maxLength: 2048
+        type: string
+    required:
+    - creditMultiplier
+    - dsn
+    type: object
+  internal_transport_http_admin.ImportOpenWebUIUsersResponse:
+    properties:
+      dedupeField:
+        type: string
+      dedupeRule:
+        type: string
+      imported:
+        type: integer
+      scanned:
+        type: integer
+      skippedDuplicateSourceEmail:
+        type: integer
+      skippedExistingEmail:
+        type: integer
+      skippedInvalidEmail:
+        type: integer
+      skippedInvalidRow:
+        type: integer
+      source:
+        type: string
+    type: object
+  internal_transport_http_admin.ImportOpenWebUIUsersResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_admin.ImportOpenWebUIUsersResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_admin.ModelPermissionGroupsResponse:
+    properties:
+      effectiveGroupIDs:
+        items:
+          type: integer
+        type: array
+      manualGroupIDs:
+        items:
+          type: integer
+        type: array
+      matchedGroupIDs:
+        items:
+          type: integer
+        type: array
+      unassigned:
+        type: boolean
+    type: object
+  internal_transport_http_admin.ModelPermissionGroupsResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_admin.ModelPermissionGroupsResponse'
+      errorMsg:
         type: string
     type: object
   internal_transport_http_admin.PatchUserRequest:
@@ -210,6 +451,161 @@ definitions:
         maxLength: 64
         type: string
     type: object
+  internal_transport_http_admin.PaymentOrderListResponseDoc:
+    properties:
+      data:
+        properties:
+          results:
+            items:
+              $ref: '#/definitions/internal_transport_http_admin.PaymentOrderResponse'
+            type: array
+          total:
+            type: integer
+        type: object
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_admin.PaymentOrderResponse:
+    properties:
+      baseAmountCents:
+        type: integer
+      baseCurrency:
+        type: string
+      billingInterval:
+        type: string
+      createdAt:
+        type: string
+      creditNanousd:
+        type: integer
+      creditUSD:
+        type: number
+      cycles:
+        type: integer
+      expiredAt:
+        type: string
+      externalCheckoutID:
+        type: string
+      externalPaymentID:
+        type: string
+      fxRate:
+        type: string
+      id:
+        type: integer
+      orderNo:
+        type: string
+      orderType:
+        type: string
+      paidAt:
+        type: string
+      payAmountCents:
+        type: integer
+      payCurrency:
+        type: string
+      planID:
+        type: integer
+      priceID:
+        type: integer
+      provider:
+        type: string
+      snapshotJSON:
+        type: string
+      status:
+        type: string
+      updatedAt:
+        type: string
+      userDisplayName:
+        type: string
+      userID:
+        type: integer
+      userLabel:
+        type: string
+      username:
+        type: string
+    type: object
+  internal_transport_http_admin.PermissionGroupDataResponse:
+    properties:
+      group:
+        $ref: '#/definitions/internal_transport_http_admin.PermissionGroupResponse'
+    type: object
+  internal_transport_http_admin.PermissionGroupDataResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_admin.PermissionGroupDataResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_admin.PermissionGroupDeleteSummaryResponse:
+    properties:
+      manualModelCount:
+        type: integer
+      manualUserCount:
+        type: integer
+      planCount:
+        type: integer
+      ruleCount:
+        type: integer
+    type: object
+  internal_transport_http_admin.PermissionGroupListResponse:
+    properties:
+      results:
+        items:
+          $ref: '#/definitions/internal_transport_http_admin.PermissionGroupResponse'
+        type: array
+    type: object
+  internal_transport_http_admin.PermissionGroupListResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_admin.PermissionGroupListResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_admin.PermissionGroupModelRuleRequest:
+    properties:
+      type:
+        maxLength: 32
+        type: string
+      value:
+        maxLength: 128
+        type: string
+    required:
+    - type
+    type: object
+  internal_transport_http_admin.PermissionGroupModelRuleResponse:
+    properties:
+      type:
+        type: string
+      value:
+        type: string
+    type: object
+  internal_transport_http_admin.PermissionGroupResponse:
+    properties:
+      createdAt:
+        type: string
+      description:
+        type: string
+      id:
+        type: integer
+      isDefault:
+        type: boolean
+      manualModelCount:
+        type: integer
+      manualUserCount:
+        type: integer
+      modelCount:
+        type: integer
+      name:
+        type: string
+      rateMultiplierPercent:
+        type: integer
+      ruleModelCount:
+        type: integer
+      subscriptionUserCount:
+        type: integer
+      updatedAt:
+        type: string
+      userCount:
+        type: integer
+    type: object
   internal_transport_http_admin.ResetUserPasswordRequest:
     properties:
       mustResetPassword:
@@ -244,6 +640,31 @@ definitions:
         $ref: '#/definitions/internal_transport_http_admin.RevokeUserSessionsResponse'
       errorMsg:
         type: string
+    type: object
+  internal_transport_http_admin.SetGroupModelsRequest:
+    properties:
+      modelIDs:
+        items:
+          type: integer
+        type: array
+      rules:
+        items:
+          $ref: '#/definitions/internal_transport_http_admin.PermissionGroupModelRuleRequest'
+        type: array
+    type: object
+  internal_transport_http_admin.SetGroupUsersRequest:
+    properties:
+      userIDs:
+        items:
+          type: integer
+        type: array
+    type: object
+  internal_transport_http_admin.SetModelPermissionGroupsRequest:
+    properties:
+      groupIDs:
+        items:
+          type: integer
+        type: array
     type: object
   internal_transport_http_admin.SystemEventListResponseDoc:
     properties:
@@ -286,6 +707,21 @@ definitions:
       updatedAt:
         type: string
     type: object
+  internal_transport_http_admin.UpdatePermissionGroupRequest:
+    properties:
+      description:
+        maxLength: 512
+        type: string
+      name:
+        maxLength: 128
+        type: string
+      rateMultiplierPercent:
+        maximum: 10000
+        minimum: 0
+        type: integer
+    required:
+    - name
+    type: object
   internal_transport_http_admin.UpdateUserStatusRequest:
     properties:
       reason:
@@ -326,6 +762,8 @@ definitions:
         type: integer
       billedUSD:
         type: number
+      billingAt:
+        type: string
       cacheReadTokens:
         type: integer
       cacheWrite1hTokens:
@@ -402,6 +840,19 @@ definitions:
       user:
         $ref: '#/definitions/internal_transport_http_admin.UserResponse'
     type: object
+  internal_transport_http_admin.UserIdentityProviderSummaryResponse:
+    properties:
+      id:
+        type: integer
+      logoURL:
+        type: string
+      name:
+        type: string
+      slug:
+        type: string
+      type:
+        type: string
+    type: object
   internal_transport_http_admin.UserListResponseDoc:
     properties:
       data:
@@ -440,6 +891,12 @@ definitions:
         type: string
       id:
         type: integer
+      identityProviders:
+        items:
+          $ref: '#/definitions/internal_transport_http_admin.UserIdentityProviderSummaryResponse'
+        type: array
+      lastActiveAt:
+        type: string
       lastLoginAt:
         type: string
       locale:
@@ -894,6 +1351,8 @@ definitions:
         type: boolean
       emailVerificationEnabled:
         type: boolean
+      passwordResetEnabled:
+        type: boolean
       providers:
         items:
           $ref: '#/definitions/internal_transport_http_auth.IdentityProviderResponse'
@@ -978,6 +1437,56 @@ definitions:
       errorMsg:
         type: string
     type: object
+  internal_transport_http_auth.PasswordResetCompleteRequest:
+    properties:
+      code:
+        type: string
+      email:
+        maxLength: 128
+        type: string
+      newPassword:
+        maxLength: 128
+        minLength: 8
+        type: string
+    required:
+    - code
+    - email
+    - newPassword
+    type: object
+  internal_transport_http_auth.PasswordResetCompleteResponse:
+    properties:
+      changed:
+        type: boolean
+    type: object
+  internal_transport_http_auth.PasswordResetCompleteResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_auth.PasswordResetCompleteResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_auth.PasswordResetStartRequest:
+    properties:
+      email:
+        maxLength: 128
+        type: string
+    required:
+    - email
+    type: object
+  internal_transport_http_auth.PasswordResetStartResponse:
+    properties:
+      expiresAt:
+        type: string
+      sent:
+        type: boolean
+    type: object
+  internal_transport_http_auth.PasswordResetStartResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_auth.PasswordResetStartResponse'
+      errorMsg:
+        type: string
+    type: object
   internal_transport_http_auth.PatchMeRequest:
     properties:
       appearancePreferences:
@@ -1056,6 +1565,19 @@ definitions:
       errorMsg:
         type: string
     type: object
+  internal_transport_http_auth.UserIdentityProviderSummaryResponse:
+    properties:
+      id:
+        type: integer
+      logoURL:
+        type: string
+      name:
+        type: string
+      slug:
+        type: string
+      type:
+        type: string
+    type: object
   internal_transport_http_auth.UserResponse:
     properties:
       appearancePreferences:
@@ -1076,10 +1598,16 @@ definitions:
         type: string
       id:
         type: integer
+      identityProviders:
+        items:
+          $ref: '#/definitions/internal_transport_http_auth.UserIdentityProviderSummaryResponse'
+        type: array
       initialSecurityRequired:
         type: boolean
       initialUsernameRequired:
         type: boolean
+      lastActiveAt:
+        type: string
       lastLoginAt:
         type: string
       locale:
@@ -1208,6 +1736,11 @@ definitions:
     type: object
   internal_transport_http_billing.BillingConfigRequest:
     properties:
+      displayCurrency:
+        enum:
+        - USD
+        - CNY
+        type: string
       mode:
         enum:
         - self
@@ -1223,11 +1756,15 @@ definitions:
       prepaidAmountUSD:
         minimum: 0
         type: number
+      usdToCNYRate:
+        type: number
     required:
     - mode
     type: object
   internal_transport_http_billing.BillingConfigResponse:
     properties:
+      displayCurrency:
+        type: string
       epayTypes:
         items:
           $ref: '#/definitions/internal_transport_http_billing.PaymentTypeResponse'
@@ -1324,6 +1861,8 @@ definitions:
         type: integer
       periodCreditUSD:
         type: number
+      permissionGroupID:
+        type: integer
       prices:
         items:
           $ref: '#/definitions/internal_transport_http_billing.BillingPriceResponse'
@@ -1400,9 +1939,9 @@ definitions:
     type: object
   internal_transport_http_billing.CreateCheckoutRequest:
     properties:
-      amountUSD:
+      amountMinorUnits:
         minimum: 0
-        type: number
+        type: integer
       cancelURL:
         maxLength: 512
         type: string
@@ -1564,6 +2103,10 @@ definitions:
     properties:
       billable:
         type: boolean
+      description:
+        type: string
+      label:
+        type: string
       priceLabel:
         type: string
       priceNanousd:
@@ -1571,6 +2114,8 @@ definitions:
       provider:
         type: string
       toolKey:
+        type: string
+      type:
         type: string
       unit:
         type: string
@@ -1868,6 +2413,8 @@ definitions:
       periodCreditUSD:
         minimum: 0
         type: number
+      permissionGroupID:
+        type: integer
     required:
     - billingInterval
     - name
@@ -2006,6 +2553,8 @@ definitions:
         type: integer
       billedUSD:
         type: number
+      billingAt:
+        type: string
       cacheReadTokens:
         type: integer
       cacheWrite1hTokens:
@@ -2138,6 +2687,37 @@ definitions:
       status:
         type: string
     type: object
+  internal_transport_http_channel.BindModelUpstreamSourceRequest:
+    properties:
+      cbDurationMin:
+        minimum: 0
+        type: integer
+      cbFailureThreshold:
+        minimum: 0
+        type: integer
+      cbWindowMin:
+        minimum: 0
+        type: integer
+      priority:
+        type: integer
+      protocol:
+        maxLength: 64
+        type: string
+      status:
+        enum:
+        - active
+        - inactive
+        type: string
+      upstreamID:
+        type: integer
+      upstreamModelID:
+        type: integer
+      weight:
+        type: integer
+    required:
+    - upstreamID
+    - upstreamModelID
+    type: object
   internal_transport_http_channel.CircuitResetResponse:
     properties:
       reset:
@@ -2145,9 +2725,28 @@ definitions:
     type: object
   internal_transport_http_channel.CreateModelRequest:
     properties:
+      accessScope:
+        enum:
+        - public
+        - internal
+        type: string
       capabilitiesJSON:
         maxLength: 10000
         type: string
+      cbDurationMin:
+        minimum: 0
+        type: integer
+      cbFailureThreshold:
+        minimum: 0
+        type: integer
+      cbPolicyMode:
+        enum:
+        - default
+        - enforced
+        type: string
+      cbWindowMin:
+        minimum: 0
+        type: integer
       description:
         maxLength: 10000
         type: string
@@ -2320,6 +2919,10 @@ definitions:
           $ref: '#/definitions/internal_transport_http_channel.ImportUpstreamModelItemRequest'
         minItems: 1
         type: array
+      permissionGroupIDs:
+        items:
+          type: integer
+        type: array
     required:
     - items
     type: object
@@ -2476,10 +3079,20 @@ definitions:
     type: object
   internal_transport_http_channel.ModelResponse:
     properties:
+      accessScope:
+        type: string
       activeSourceCount:
         type: integer
       capabilitiesJSON:
         type: string
+      cbDurationMin:
+        type: integer
+      cbFailureThreshold:
+        type: integer
+      cbPolicyMode:
+        type: string
+      cbWindowMin:
+        type: integer
       createdAt:
         type: string
       description:
@@ -2503,6 +3116,8 @@ definitions:
       systemPrompt:
         type: string
       updatedAt:
+        type: string
+      upstreamNamesJSON:
         type: string
       vendor:
         type: string
@@ -2532,8 +3147,16 @@ definitions:
         type: string
       bindingCode:
         type: string
+      cbDurationMin:
+        type: integer
+      cbFailureThreshold:
+        type: integer
+      cbWindowMin:
+        type: integer
       circuitOpen:
         type: boolean
+      circuitScope:
+        type: string
       circuitUntil:
         type: string
       createdAt:
@@ -2567,6 +3190,8 @@ definitions:
       upstreamModelVendor:
         type: string
       upstreamName:
+        type: string
+      upstreamStatus:
         type: string
       weight:
         type: integer
@@ -2684,9 +3309,28 @@ definitions:
     type: object
   internal_transport_http_channel.UpdateModelRequest:
     properties:
+      accessScope:
+        enum:
+        - public
+        - internal
+        type: string
       capabilitiesJSON:
         maxLength: 10000
         type: string
+      cbDurationMin:
+        minimum: 0
+        type: integer
+      cbFailureThreshold:
+        minimum: 0
+        type: integer
+      cbPolicyMode:
+        enum:
+        - default
+        - enforced
+        type: string
+      cbWindowMin:
+        minimum: 0
+        type: integer
       description:
         maxLength: 10000
         type: string
@@ -2721,6 +3365,15 @@ definitions:
     type: object
   internal_transport_http_channel.UpdateModelUpstreamSourceRequest:
     properties:
+      cbDurationMin:
+        minimum: 0
+        type: integer
+      cbFailureThreshold:
+        minimum: 0
+        type: integer
+      cbWindowMin:
+        minimum: 0
+        type: integer
       priority:
         type: integer
       protocol:
@@ -3146,6 +3799,22 @@ definitions:
       errorMsg:
         type: string
     type: object
+  internal_transport_http_conversation.ConversationDefaultModelCandidateResponse:
+    properties:
+      platformModelName:
+        type: string
+      source:
+        type: string
+      usedAt:
+        type: string
+    type: object
+  internal_transport_http_conversation.ConversationDefaultModelCandidateResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_conversation.ConversationDefaultModelCandidateResponse'
+      errorMsg:
+        type: string
+    type: object
   internal_transport_http_conversation.ConversationDeleteResponse:
     properties:
       deleted:
@@ -3421,17 +4090,21 @@ definitions:
       requestId:
         type: string
     type: object
+  internal_transport_http_conversation.FileListResponse:
+    properties:
+      quota:
+        $ref: '#/definitions/internal_transport_http_conversation.StorageQuotaResponse'
+      results:
+        items:
+          $ref: '#/definitions/internal_transport_http_conversation.FileObjectResponse'
+        type: array
+      total:
+        type: integer
+    type: object
   internal_transport_http_conversation.FileListResponseDoc:
     properties:
       data:
-        properties:
-          results:
-            items:
-              $ref: '#/definitions/internal_transport_http_conversation.FileObjectResponse'
-            type: array
-          total:
-            type: integer
-        type: object
+        $ref: '#/definitions/internal_transport_http_conversation.FileListResponse'
       errorMsg:
         type: string
     type: object
@@ -3639,6 +4312,8 @@ definitions:
         type: integer
       createdAt:
         type: string
+      editedAt:
+        type: string
       errorCode:
         type: string
       errorMessage:
@@ -3691,6 +4366,13 @@ definitions:
         type: string
       userID:
         type: integer
+    type: object
+  internal_transport_http_conversation.MessageResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_conversation.MessageResponse'
+      errorMsg:
+        type: string
     type: object
   internal_transport_http_conversation.MessageTraceBlockResponse:
     properties:
@@ -3789,6 +4471,8 @@ definitions:
       contentType:
         type: string
       createdAt:
+        type: string
+      editedAt:
         type: string
       errorCode:
         type: string
@@ -3946,7 +4630,6 @@ definitions:
         maxLength: 64
         type: string
       content:
-        maxLength: 20000
         type: string
       contentType:
         enum:
@@ -3961,6 +4644,11 @@ definitions:
           type: string
         maxItems: 20
         type: array
+      htmlVisualColorMode:
+        enum:
+        - light
+        - dark
+        type: string
       htmlVisualPrompt:
         type: boolean
       model:
@@ -3977,6 +4665,11 @@ definitions:
           type: integer
         maxItems: 128
         type: array
+      skillIDs:
+        items:
+          type: integer
+        maxItems: 128
+        type: array
       sourceMessagePublicID:
         maxLength: 32
         type: string
@@ -3988,6 +4681,8 @@ definitions:
     properties:
       assistantMessage:
         $ref: '#/definitions/internal_transport_http_conversation.MessageResponse'
+      metadataRefreshHint:
+        type: string
       userMessage:
         $ref: '#/definitions/internal_transport_http_conversation.MessageResponse'
     type: object
@@ -4069,6 +4764,13 @@ definitions:
       ragOptOut:
         type: boolean
     type: object
+  internal_transport_http_conversation.UpdateMessageRequest:
+    properties:
+      content:
+        type: string
+    required:
+    - content
+    type: object
   internal_transport_http_conversation.UploadFileResponseDoc:
     properties:
       data:
@@ -4146,6 +4848,118 @@ definitions:
       value:
         type: string
     type: object
+  internal_transport_http_promptpreset.ErrorDoc:
+    properties:
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_promptpreset.PatchPromptPresetRequest:
+    properties:
+      content:
+        maxLength: 10000
+        type: string
+      description:
+        maxLength: 256
+        type: string
+      enabled:
+        type: boolean
+      sortOrder:
+        type: integer
+      title:
+        maxLength: 64
+        type: string
+      trigger:
+        maxLength: 64
+        type: string
+    type: object
+  internal_transport_http_promptpreset.PromptPresetDataResponse:
+    properties:
+      promptPreset:
+        $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetResponse'
+    type: object
+  internal_transport_http_promptpreset.PromptPresetDeleteDataResponse:
+    properties:
+      deleted:
+        type: boolean
+    type: object
+  internal_transport_http_promptpreset.PromptPresetDeleteResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetDeleteDataResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_promptpreset.PromptPresetPageResponseDoc:
+    properties:
+      data:
+        properties:
+          results:
+            items:
+              $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetResponse'
+            type: array
+          total:
+            type: integer
+        type: object
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_promptpreset.PromptPresetResponse:
+    properties:
+      content:
+        type: string
+      createdAt:
+        type: string
+      createdByUserID:
+        type: integer
+      description:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: integer
+      scope:
+        type: string
+      sortOrder:
+        type: integer
+      title:
+        type: string
+      trigger:
+        type: string
+      updatedAt:
+        type: string
+      updatedByUserID:
+        type: integer
+    type: object
+  internal_transport_http_promptpreset.PromptPresetResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetDataResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_promptpreset.WritePromptPresetRequest:
+    properties:
+      content:
+        maxLength: 10000
+        type: string
+      description:
+        maxLength: 256
+        type: string
+      enabled:
+        type: boolean
+      sortOrder:
+        type: integer
+      title:
+        maxLength: 64
+        type: string
+      trigger:
+        maxLength: 64
+        type: string
+    required:
+    - content
+    - title
+    - trigger
+    type: object
   internal_transport_http_settings.PatchItem:
     properties:
       clear:
@@ -4169,6 +4983,153 @@ definitions:
         type: array
     required:
     - items
+    type: object
+  internal_transport_http_skill.ErrorDoc:
+    properties:
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_skill.PatchSkillRequest:
+    properties:
+      description:
+        maxLength: 256
+        type: string
+      enabled:
+        type: boolean
+      markdown:
+        maxLength: 10000
+        type: string
+      sortOrder:
+        type: integer
+      title:
+        maxLength: 64
+        type: string
+      trigger:
+        maxLength: 64
+        type: string
+    type: object
+  internal_transport_http_skill.SkillDataResponse:
+    properties:
+      skill:
+        $ref: '#/definitions/internal_transport_http_skill.SkillResponse'
+    type: object
+  internal_transport_http_skill.SkillDeleteDataResponse:
+    properties:
+      deleted:
+        type: boolean
+    type: object
+  internal_transport_http_skill.SkillDeleteResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_skill.SkillDeleteDataResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_skill.SkillPageResponseDoc:
+    properties:
+      data:
+        properties:
+          results:
+            items:
+              $ref: '#/definitions/internal_transport_http_skill.SkillResponse'
+            type: array
+          total:
+            type: integer
+        type: object
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_skill.SkillResponse:
+    properties:
+      createdAt:
+        type: string
+      createdByUserID:
+        type: integer
+      description:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: integer
+      markdown:
+        type: string
+      scope:
+        type: string
+      sortOrder:
+        type: integer
+      title:
+        type: string
+      trigger:
+        type: string
+      updatedAt:
+        type: string
+      updatedByUserID:
+        type: integer
+    type: object
+  internal_transport_http_skill.SkillResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/internal_transport_http_skill.SkillDataResponse'
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_skill.SkillSummaryPageResponseDoc:
+    properties:
+      data:
+        properties:
+          results:
+            items:
+              $ref: '#/definitions/internal_transport_http_skill.SkillSummaryResponse'
+            type: array
+          total:
+            type: integer
+        type: object
+      errorMsg:
+        type: string
+    type: object
+  internal_transport_http_skill.SkillSummaryResponse:
+    properties:
+      createdAt:
+        type: string
+      description:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: integer
+      scope:
+        type: string
+      sortOrder:
+        type: integer
+      title:
+        type: string
+      trigger:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  internal_transport_http_skill.WriteSkillRequest:
+    properties:
+      description:
+        maxLength: 256
+        type: string
+      enabled:
+        type: boolean
+      markdown:
+        maxLength: 10000
+        type: string
+      sortOrder:
+        type: integer
+      title:
+        maxLength: 64
+        type: string
+      trigger:
+        maxLength: 64
+        type: string
+    required:
+    - markdown
+    - title
+    - trigger
     type: object
   internal_transport_http_usersettings.PatchSettingsRequest:
     properties:
@@ -4197,7 +5158,7 @@ info:
   contact: {}
   description: DEEIX Chat 后端 API 文档
   title: DEEIX Chat API
-  version: "0.2.0"
+  version: "0.3.2"
 paths:
   /admin/announcements:
     get:
@@ -4591,6 +5552,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/internal_transport_http_billing.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_billing.ErrorDoc'
         "500":
           description: Internal Server Error
           schema:
@@ -4873,6 +5838,95 @@ paths:
       summary: 管理员查询模型调用日志
       tags:
       - admin
+  /admin/conversation-events:
+    get:
+      consumes:
+      - application/json
+      description: 管理员分页查看对话运行轨迹、工具、MCP 与处理事件
+      parameters:
+      - description: 页码
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量
+        in: query
+        name: page_size
+        type: integer
+      - description: 搜索运行ID、事件、阶段、标题、工具名
+        in: query
+        name: query
+        type: string
+      - description: 事件范围(trace_block/trace_event/tool_call)
+        in: query
+        name: event_scope
+        type: string
+      - description: 事件类型
+        in: query
+        name: event_type
+        type: string
+      - description: 事件状态
+        in: query
+        name: status
+        type: string
+      - description: 用户ID
+        in: query
+        name: user_id
+        type: integer
+      - description: 会话ID
+        in: query
+        name: conversation_id
+        type: integer
+      - description: 创建时间起点(RFC3339)
+        in: query
+        name: created_from
+        type: string
+      - description: 创建时间终点(RFC3339)
+        in: query
+        name: created_to
+        type: string
+      - description: 排序方式
+        in: query
+        name: sort
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ConversationEventListResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员查询对话事件
+      tags:
+      - admin
+  /admin/conversations/export:
+    get:
+      description: 流式导出全量会话及消息为 NDJSON 文件，最后一行为 export_manifest 元数据
+      produces:
+      - application/x-ndjson
+      responses:
+        "200":
+          description: NDJSON stream
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员导出全量对话数据
+      tags:
+      - admin
   /admin/llm/models:
     get:
       consumes:
@@ -4891,6 +5945,10 @@ paths:
         in: query
         name: only_active
         type: boolean
+      - description: 仅查询公开且可路由模型
+        in: query
+        name: only_available
+        type: boolean
       - description: 搜索关键词
         in: query
         name: q
@@ -4907,6 +5965,10 @@ paths:
         in: query
         name: protocol
         type: string
+      - description: 上游 ID
+        in: query
+        name: upstream
+        type: integer
       - description: 排序：sortOrder_asc/updated_desc/id_desc/platformModelName_asc/sourceCount_desc
         in: query
         name: sort
@@ -5078,6 +6140,50 @@ paths:
       security:
       - BearerAuth: []
       summary: 管理员查询模型上游来源
+      tags:
+      - llm
+    post:
+      consumes:
+      - application/json
+      description: 管理员将当前平台模型绑定到一个已存在的上游模型
+      parameters:
+      - description: 模型ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 来源绑定参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_channel.BindModelUpstreamSourceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_channel.ModelUpstreamSourceDataResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_channel.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_channel.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_channel.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_channel.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员绑定模型上游来源
       tags:
       - llm
   /admin/llm/models/{id}/sources/{route_id}:
@@ -6092,6 +7198,616 @@ paths:
       summary: 管理员批量删除上游
       tags:
       - llm
+  /admin/logs/cleanup:
+    post:
+      consumes:
+      - application/json
+      description: 按日志类型物理删除指定时间点之前的日志；操作不可恢复
+      parameters:
+      - description: 日志清理参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_admin.CleanupLogsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.CleanupLogsResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员清理日志
+      tags:
+      - admin
+  /admin/models/{modelID}/permission-groups:
+    get:
+      consumes:
+      - application/json
+      description: 返回平台模型的手动权限组与动态规则命中的有效权限组
+      parameters:
+      - description: 平台模型ID
+        in: path
+        name: modelID
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ModelPermissionGroupsResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员列出模型权限组
+      tags:
+      - admin
+    put:
+      consumes:
+      - application/json
+      description: 全量替换平台模型的手动权限组，不影响权限组动态规则
+      parameters:
+      - description: 平台模型ID
+        in: path
+        name: modelID
+        required: true
+        type: integer
+      - description: 权限组 ID 集合
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_admin.SetModelPermissionGroupsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ModelPermissionGroupsResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员设置模型手动权限组
+      tags:
+      - admin
+  /admin/payment-orders:
+    get:
+      consumes:
+      - application/json
+      description: 管理员分页查看订阅和充值支付单
+      parameters:
+      - description: 页码
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量
+        in: query
+        name: page_size
+        type: integer
+      - description: 搜索订单号、支付渠道、外部支付ID
+        in: query
+        name: query
+        type: string
+      - description: 订单类型(subscription/topup)
+        in: query
+        name: order_type
+        type: string
+      - description: 支付渠道
+        in: query
+        name: provider
+        type: string
+      - description: 支付状态
+        in: query
+        name: status
+        type: string
+      - description: 用户ID
+        in: query
+        name: user_id
+        type: integer
+      - description: 创建时间起点(RFC3339)
+        in: query
+        name: created_from
+        type: string
+      - description: 创建时间终点(RFC3339)
+        in: query
+        name: created_to
+        type: string
+      - description: 排序方式
+        in: query
+        name: sort
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.PaymentOrderListResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员查询支付订单记录
+      tags:
+      - admin
+  /admin/permission-groups:
+    get:
+      consumes:
+      - application/json
+      description: 返回全部模型访问权限组，默认组优先
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.PermissionGroupListResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员列出权限组
+      tags:
+      - admin
+    post:
+      consumes:
+      - application/json
+      description: 创建模型访问权限组并设置计费倍率
+      parameters:
+      - description: 权限组参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_admin.CreatePermissionGroupRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.PermissionGroupDataResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员创建权限组
+      tags:
+      - admin
+  /admin/permission-groups/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除权限组及其模型、用户关联；默认组和被套餐引用的权限组不可删除
+      parameters:
+      - description: 权限组ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.DeletePermissionGroupResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员删除权限组
+      tags:
+      - admin
+    patch:
+      consumes:
+      - application/json
+      description: 更新权限组名称、说明与计费倍率
+      parameters:
+      - description: 权限组ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 权限组参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_admin.UpdatePermissionGroupRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.PermissionGroupDataResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员更新权限组
+      tags:
+      - admin
+  /admin/permission-groups/{id}/models:
+    get:
+      consumes:
+      - application/json
+      description: 返回权限组授权的平台模型 ID 集合
+      parameters:
+      - description: 权限组ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.GroupModelsResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员列出权限组模型
+      tags:
+      - admin
+    put:
+      consumes:
+      - application/json
+      description: 全量替换权限组授权的平台模型 ID 集合与动态访问规则
+      parameters:
+      - description: 权限组ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 平台模型 ID 集合
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_admin.SetGroupModelsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.GroupModelsResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员设置权限组模型
+      tags:
+      - admin
+  /admin/permission-groups/{id}/users:
+    get:
+      consumes:
+      - application/json
+      description: 返回权限组内的用户 ID 集合
+      parameters:
+      - description: 权限组ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.GroupUsersResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员列出权限组用户
+      tags:
+      - admin
+    put:
+      consumes:
+      - application/json
+      description: 全量替换权限组内的用户 ID 集合
+      parameters:
+      - description: 权限组ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 用户 ID 集合
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_admin.SetGroupUsersRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.GroupUsersResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员设置权限组用户
+      tags:
+      - admin
+  /admin/prompt-presets:
+    get:
+      consumes:
+      - application/json
+      parameters:
+      - description: 搜索关键词
+        in: query
+        name: q
+        type: string
+      - description: 是否启用
+        in: query
+        name: enabled
+        type: boolean
+      - description: 页码
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetPageResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员查询内置提示词
+      tags:
+      - admin-prompt-presets
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 提示词配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_promptpreset.WritePromptPresetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员创建内置提示词
+      tags:
+      - admin-prompt-presets
+  /admin/prompt-presets/{id}:
+    delete:
+      consumes:
+      - application/json
+      parameters:
+      - description: 提示词ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetDeleteResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员删除内置提示词
+      tags:
+      - admin-prompt-presets
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: 提示词ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 更新字段
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_promptpreset.PatchPromptPresetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员更新内置提示词
+      tags:
+      - admin-prompt-presets
   /admin/settings:
     get:
       description: 按 namespace 分组返回全部动态配置项
@@ -6347,6 +8063,154 @@ paths:
       summary: 停止托管 Tika
       tags:
       - admin/settings
+  /admin/skills:
+    get:
+      consumes:
+      - application/json
+      parameters:
+      - description: 搜索关键词
+        in: query
+        name: q
+        type: string
+      - description: 是否启用
+        in: query
+        name: enabled
+        type: boolean
+      - description: 页码
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillPageResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员查询内置技能
+      tags:
+      - admin-skills
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 技能配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_skill.WriteSkillRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员创建内置技能
+      tags:
+      - admin-skills
+  /admin/skills/{id}:
+    delete:
+      consumes:
+      - application/json
+      parameters:
+      - description: 技能ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillDeleteResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员删除内置技能
+      tags:
+      - admin-skills
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: 技能ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 更新字段
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_skill.PatchSkillRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员更新内置技能
+      tags:
+      - admin-skills
   /admin/system-events:
     get:
       consumes:
@@ -6469,6 +8333,18 @@ paths:
         in: query
         name: page_size
         type: integer
+      - description: 搜索用户名、昵称、邮箱或公开ID
+        in: query
+        name: q
+        type: string
+      - description: 订阅状态过滤(active/free)
+        in: query
+        name: subscription_status
+        type: string
+      - description: 身份源 slug 过滤
+        in: query
+        name: identity_provider
+        type: string
       produces:
       - application/json
       responses:
@@ -6728,11 +8604,52 @@ paths:
       summary: 管理员更新用户状态
       tags:
       - admin
+  /admin/users/import/openwebui:
+    post:
+      consumes:
+      - application/json
+      description: 从 OpenWebUI SQLite 或 PostgreSQL 数据库读取用户，按 email 去重导入；已存在用户不会修改
+      parameters:
+      - description: OpenWebUI 导入参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_admin.ImportOpenWebUIUsersRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ImportOpenWebUIUsersResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_admin.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员导入 OpenWebUI 用户
+      tags:
+      - admin
   /announcements:
     get:
       consumes:
       - application/json
       description: 登录用户获取当前可展示的站点公告列表
+      parameters:
+      - description: 是否包含今日不再显示的公告
+        in: query
+        name: include_dismissed
+        type: boolean
       produces:
       - application/json
       responses:
@@ -6930,6 +8847,66 @@ paths:
       security:
       - BearerAuth: []
       summary: 登出全部会话
+      tags:
+      - auth
+  /auth/password/reset/complete:
+    post:
+      consumes:
+      - application/json
+      description: 使用邮箱、验证码和新密码完成密码重置；失败时返回通用错误，避免暴露账号状态
+      parameters:
+      - description: 密码重置完成请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_auth.PasswordResetCompleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_auth.PasswordResetCompleteResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_auth.ErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/internal_transport_http_auth.ErrorDoc'
+      summary: 完成密码重置
+      tags:
+      - auth
+  /auth/password/reset/start:
+    post:
+      consumes:
+      - application/json
+      description: SMTP 配置可用时，向已验证邮箱发送密码重置验证码；失败时返回通用错误，避免暴露账号状态
+      parameters:
+      - description: 密码重置验证码请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_auth.PasswordResetStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_auth.PasswordResetStartResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_auth.ErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/internal_transport_http_auth.ErrorDoc'
+      summary: 发送密码重置验证码
       tags:
       - auth
   /auth/refresh:
@@ -7676,6 +9653,10 @@ paths:
         in: query
         name: project
         type: string
+      - description: 搜索关键词，匹配会话元数据、项目名称和消息正文
+        in: query
+        name: q
+        type: string
       produces:
       - application/json
       responses:
@@ -8310,6 +10291,62 @@ paths:
       summary: 重命名会话
       tags:
       - chat
+  /conversations/{id}/title/regenerate:
+    post:
+      consumes:
+      - application/json
+      description: 根据指定会话已有内容重新生成标题
+      parameters:
+      - description: 会话 public_id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.ConversationUpdateResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 自动重新命名会话
+      tags:
+      - chat
+  /conversations/default-model-candidate:
+    get:
+      consumes:
+      - application/json
+      description: 返回后台配置的新会话系统推荐模型；未配置时返回空候选
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.ConversationDefaultModelCandidateResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 查询新会话默认模型候选
+      tags:
+      - chat
   /conversations/project:
     post:
       consumes:
@@ -8856,6 +10893,47 @@ paths:
       summary: 删除用户个性化记忆
       tags:
       - memory
+  /messages/{id}:
+    patch:
+      consumes:
+      - application/json
+      description: 更新当前用户会话中的 assistant 消息内容，并标记为已编辑
+      parameters:
+      - description: 消息 public_id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 消息内容
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_conversation.UpdateMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.MessageResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_conversation.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 更新消息内容
+      tags:
+      - chat
   /messages/{id}/feedback:
     put:
       consumes:
@@ -8918,6 +10996,203 @@ paths:
       summary: 查询可用模型目录
       tags:
       - llm
+  /prompt-presets:
+    get:
+      consumes:
+      - application/json
+      description: 返回管理员内置和当前用户自定义的已启用提示词，用于 slash 选择器
+      parameters:
+      - description: 搜索关键词
+        in: query
+        name: q
+        type: string
+      - description: 页码
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetPageResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 查询当前用户可用预制提示词
+      tags:
+      - prompt-presets
+  /prompt-presets/mine:
+    get:
+      consumes:
+      - application/json
+      description: 分页查询当前用户自定义提示词
+      parameters:
+      - description: 搜索关键词
+        in: query
+        name: q
+        type: string
+      - description: 是否启用
+        in: query
+        name: enabled
+        type: boolean
+      - description: 页码
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetPageResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 查询我的自定义提示词
+      tags:
+      - prompt-presets
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 提示词配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_promptpreset.WritePromptPresetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 创建我的自定义提示词
+      tags:
+      - prompt-presets
+  /prompt-presets/mine/{id}:
+    delete:
+      consumes:
+      - application/json
+      parameters:
+      - description: 提示词ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetDeleteResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 删除我的自定义提示词
+      tags:
+      - prompt-presets
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: 提示词ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 更新字段
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_promptpreset.PatchPromptPresetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.PromptPresetResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_promptpreset.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 更新我的自定义提示词
+      tags:
+      - prompt-presets
+  /settings/chat-context-policy:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_DEEIX-AI_DEEIX-Chat_backend_internal_shared_response.Envelope'
+      security:
+      - BearerAuth: []
+      summary: 查询聊天上下文策略
+      tags:
+      - settings
   /settings/login-page:
     get:
       produces:
@@ -9066,6 +11341,223 @@ paths:
       summary: 获取公开分享附件内容
       tags:
       - chat
+  /skills:
+    get:
+      consumes:
+      - application/json
+      description: 返回管理员内置和当前用户自定义的已启用技能摘要，用于会话按需选择 Skill 上下文
+      parameters:
+      - description: 搜索关键词
+        in: query
+        name: q
+        type: string
+      - description: 页码
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillSummaryPageResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 查询当前用户可用技能
+      tags:
+      - skills
+  /skills/{id}:
+    get:
+      consumes:
+      - application/json
+      description: 按需返回单个可用 Skill 的完整 SKILL.md 内容，用于用户查看详情
+      parameters:
+      - description: 技能ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 查询当前用户可用技能详情
+      tags:
+      - skills
+  /skills/mine:
+    get:
+      consumes:
+      - application/json
+      parameters:
+      - description: 搜索关键词
+        in: query
+        name: q
+        type: string
+      - description: 是否启用
+        in: query
+        name: enabled
+        type: boolean
+      - description: 页码
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillPageResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 查询我的自定义技能
+      tags:
+      - skills
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 技能配置
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_skill.WriteSkillRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 创建我的自定义技能
+      tags:
+      - skills
+  /skills/mine/{id}:
+    delete:
+      consumes:
+      - application/json
+      parameters:
+      - description: 技能ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillDeleteResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 删除我的自定义技能
+      tags:
+      - skills
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: 技能ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 更新字段
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http_skill.PatchSkillRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.SkillResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_transport_http_skill.ErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 更新我的自定义技能
+      tags:
+      - skills
   /user/settings:
     get:
       description: 返回当前用户全部个人偏好配置，缺失项以默认值填充

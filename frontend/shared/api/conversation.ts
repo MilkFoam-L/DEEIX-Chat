@@ -3,6 +3,7 @@ import { apiRequest, ApiError, pathParam } from "@/shared/api/http-client";
 import type { PagePayload } from "@/shared/api/common.types";
 import type {
   ConversationDTO,
+  ConversationDefaultModelCandidateDTO,
   ConversationExportDTO,
   ConversationProjectDTO,
   ConversationProjectFilter,
@@ -29,6 +30,7 @@ import type {
   ReorderConversationProjectsRequest,
   SendMessageRequest,
   MediaImageRequest,
+  MediaVideoRequest,
   SendMessageResult,
   SetConversationArchiveRequest,
   SetConversationProjectRequest,
@@ -310,6 +312,7 @@ type ListConversationsOptions = {
   starred?: ConversationStarredFilter;
   share?: ConversationShareFilter;
   project?: ConversationProjectFilter;
+  query?: string;
 };
 
 type ListConversationProjectsOptions = {
@@ -341,6 +344,7 @@ export async function listConversations(
   const starred = options.starred?.trim() || "all";
   const share = options.share?.trim() || "all";
   const project = options.project?.trim() || "all";
+  const query = options.query?.trim() || "";
   const params = new URLSearchParams({
     page: String(page),
     page_size: String(pageSize),
@@ -349,6 +353,9 @@ export async function listConversations(
     share,
     project,
   });
+  if (query) {
+    params.set("q", query);
+  }
   const data = await authedRequest<PagePayload<ConversationDTO>>(
     `/api/v1/conversations?${params.toString()}`,
     {
@@ -360,6 +367,18 @@ export async function listConversations(
     total: data.total ?? 0,
     results: data.results ?? [],
   };
+}
+
+export async function getConversationDefaultModelCandidate(
+  accessToken: string,
+): Promise<ConversationDefaultModelCandidateDTO> {
+  return authedRequest<ConversationDefaultModelCandidateDTO>(
+    "/api/v1/conversations/default-model-candidate",
+    {
+      accessToken,
+    },
+    true,
+  );
 }
 
 export async function listConversationProjects(
@@ -517,6 +536,14 @@ export async function exportConversation(
   );
 }
 
+export async function exportAllConversations(accessToken: string): Promise<Blob> {
+  const response = await authedFetch("/api/v1/conversations/export", { accessToken });
+  if (!response.ok) {
+    throw new Error(`export failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
 export async function renameConversation(
   accessToken: string,
   conversationPublicID: string,
@@ -528,6 +555,20 @@ export async function renameConversation(
       method: "PATCH",
       accessToken,
       body: payload,
+    },
+    true,
+  );
+}
+
+export async function regenerateConversationTitle(
+  accessToken: string,
+  conversationPublicID: string,
+): Promise<ConversationDTO> {
+  return authedRequest<ConversationDTO>(
+    `/api/v1/conversations/${pathParam(conversationPublicID)}/title/regenerate`,
+    {
+      method: "POST",
+      accessToken,
     },
     true,
   );
@@ -717,21 +758,55 @@ export async function getContextArtifact(
 }
 
 // Messages
-export async function listMessages(
+type ListMessagesOptions = {
+  page?: number;
+  pageSize?: number;
+  tail?: boolean;
+  beforeID?: number;
+};
+
+export async function listMessagesPage(
   accessToken: string,
   conversationPublicID: string,
-  page = 1,
-  pageSize = 1000,
-): Promise<MessageDTO[]> {
-  const tailQuery = page === 1 ? "&tail=true" : "";
+  options: ListMessagesOptions = {},
+): Promise<PagePayload<MessageDTO>> {
+  const page = options.page && options.page > 0 ? options.page : 1;
+  const pageSize = options.pageSize && options.pageSize > 0 ? options.pageSize : 100;
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  if (options.tail) {
+    params.set("tail", "true");
+  }
+  if (options.beforeID && options.beforeID > 0) {
+    params.set("before_id", String(options.beforeID));
+  }
   const data = await authedRequest<PagePayload<MessageDTO>>(
-    `/api/v1/conversations/${pathParam(conversationPublicID)}/messages?page=${page}&page_size=${pageSize}${tailQuery}`,
+    `/api/v1/conversations/${pathParam(conversationPublicID)}/messages?${params.toString()}`,
     {
       accessToken,
     },
     true,
   );
-  return data.results ?? [];
+  return {
+    total: data.total ?? 0,
+    results: data.results ?? [],
+  };
+}
+
+export async function listMessages(
+  accessToken: string,
+  conversationPublicID: string,
+  page = 1,
+  pageSize = 100,
+): Promise<MessageDTO[]> {
+  const data = await listMessagesPage(accessToken, conversationPublicID, {
+    page,
+    pageSize,
+    tail: page === 1,
+  });
+  return data.results;
 }
 
 export async function sendMessage(
@@ -964,6 +1039,21 @@ export async function streamImageEdit(
     accessToken,
     conversationPublicID,
     "/media/images/edits/stream",
+    payload,
+    options,
+  );
+}
+
+export async function streamVideoGeneration(
+  accessToken: string,
+  conversationPublicID: string,
+  payload: MediaVideoRequest,
+  options: ConversationStreamOptions = {},
+): Promise<SendMessageResult> {
+  return postConversationStream(
+    accessToken,
+    conversationPublicID,
+    "/media/videos/generations/stream",
     payload,
     options,
   );

@@ -113,22 +113,34 @@ func (s *Service) ListRedemptionCodes(ctx context.Context, input RedemptionCodeL
 	status := strings.TrimSpace(input.Status)
 	availability := strings.TrimSpace(input.Availability)
 	query := strings.TrimSpace(input.Query)
+	currentMode := ""
 	if availability == "available" {
-		currentMode, err := s.repo.GetBillingMode(ctx)
+		modeValue, err := s.repo.GetBillingMode(ctx)
 		if err != nil {
 			return nil, 0, err
 		}
-		currentMode = strings.TrimSpace(currentMode)
+		currentMode = strings.TrimSpace(modeValue)
 		if currentMode != domainbilling.RedemptionCodeModeUsage && currentMode != domainbilling.RedemptionCodeModePeriod {
 			return []RedemptionCodeView{}, 0, nil
 		}
-		if mode != "" && mode != currentMode {
+		if mode != "" && !domainbilling.RedemptionCodeModeAvailableInBillingMode(mode, currentMode) {
 			return []RedemptionCodeView{}, 0, nil
 		}
-		mode = currentMode
+		if mode == "" {
+			if currentMode == domainbilling.RedemptionCodeModePeriod {
+				mode = ""
+			} else {
+				mode = currentMode
+			}
+		}
+	}
+	modes := []string(nil)
+	if availability == "available" && mode == "" {
+		modes = domainbilling.RedemptionCodeModesAvailableInBillingMode(currentMode)
 	}
 	items, total, err := s.repo.ListRedemptionCodes(ctx, repository.RedemptionCodeListFilter{
 		Mode:         mode,
+		Modes:        modes,
 		Status:       status,
 		Availability: availability,
 		Query:        query,

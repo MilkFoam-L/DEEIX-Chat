@@ -10,9 +10,8 @@ import (
 
 func TestBuildConversationMetadataMessagesTruncatesToBudget(t *testing.T) {
 	userMsg := model.Message{Content: strings.Repeat("用户输入内容", 6000)}
-	assistantMsg := model.Message{Content: strings.Repeat("助手回复内容", 6000)}
 
-	got := buildConversationMetadataMessages(userMsg, assistantMsg)
+	got := buildConversationMetadataMessages(userMsg)
 
 	if tokens := estimateTokens(got); tokens > conversationMetadataMessageMaxTokens {
 		t.Fatalf("metadata messages exceeded budget: got %d, want <= %d", tokens, conversationMetadataMessageMaxTokens)
@@ -26,6 +25,19 @@ func TestBuildConversationMetadataMessagesTruncatesToBudget(t *testing.T) {
 	}
 	if !strings.Contains(got, "[truncated]") {
 		t.Fatal("expected metadata messages to mark truncated content")
+	}
+}
+
+func TestBuildConversationMetadataMessagesUsesOnlyUserMessage(t *testing.T) {
+	userMsg := model.Message{Content: "帮我设计一套灰度发布方案"}
+
+	got := buildConversationMetadataMessages(userMsg)
+
+	if !strings.Contains(got, "user:\n帮我设计一套灰度发布方案") {
+		t.Fatalf("expected metadata messages to include user bubble, got %q", got)
+	}
+	if strings.Contains(got, "assistant:") {
+		t.Fatalf("expected metadata messages to exclude assistant content, got %q", got)
 	}
 }
 
@@ -82,8 +94,8 @@ func TestParseGeneratedConversationLabelsHandlesLooseJSON(t *testing.T) {
 
 func TestConversationTitleFromFirstUserMessage(t *testing.T) {
 	cases := map[string]string{
-		"  这是一条很长的第一条用户消息，用来测试标题截断  ":        "这是一条很长的第一条用户消息，用来测试标",
-		"\n\nhello   world   from   DEEIX\n": "hello world from DEE",
+		"  这是一条很长的第一条用户消息，用来测试标题截断  ":        "这是一条很长的第一条用户消息，用",
+		"\n\nhello   world   from   DEEIX\n": "hello world from",
 		"\"简短标题\"":                           "简短标题",
 		"   ":                                "",
 	}
@@ -91,6 +103,110 @@ func TestConversationTitleFromFirstUserMessage(t *testing.T) {
 		if got := conversationTitleFromFirstUserMessage(input); got != want {
 			t.Fatalf("unexpected first-message title for %q: got %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestConversationFallbackTitleUsesUnifiedLimit(t *testing.T) {
+	if conversationFallbackTitleMaxRunes != 16 {
+		t.Fatalf("expected fallback title limit to stay unified at 16, got %d", conversationFallbackTitleMaxRunes)
+	}
+
+	got := conversationTitleFromFirstUserMessage("0123456789abcdefXYZ")
+	if got != "0123456789abcdef" {
+		t.Fatalf("expected fallback title to truncate to 16 runes, got %q", got)
+	}
+}
+
+func TestBuildConversationMetadataMessagesEmptyWhenNoText(t *testing.T) {
+	got := buildConversationMetadataMessages(model.Message{})
+	if got != "" {
+		t.Fatalf("expected no metadata prompt body for empty messages, got %q", got)
+	}
+}
+
+func TestConversationMetadataRefreshHint(t *testing.T) {
+	cases := []struct {
+		name         string
+		conversation model.Conversation
+		userMsg      model.Message
+		want         string
+	}{
+		{
+			name:         "not needed when title and labels already exist",
+			conversation: model.Conversation{Title: "已有标题", LabelsJSON: `["技术"]`},
+			userMsg:      model.Message{Content: "新的问题"},
+			want:         conversationMetadataRefreshNotNeeded,
+		},
+		{
+			name:         "skip when no titleable text",
+			conversation: model.Conversation{Title: "新对话", LabelsJSON: "[]"},
+			want:         conversationMetadataRefreshNoContent,
+		},
+		{
+			name:         "pending when metadata needed and text exists",
+			conversation: model.Conversation{Title: "新对话", LabelsJSON: "[]"},
+			userMsg:      model.Message{Content: "帮我整理本周项目计划"},
+			want:         conversationMetadataRefreshPending,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := conversationMetadataRefreshHint(tc.conversation, tc.userMsg)
+			if got != tc.want {
+				t.Fatalf("unexpected metadata refresh hint: got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildConversationTitleMessagesUsesCompletedTranscript(t *testing.T) {
+	messages := []model.Message{
+		{Role: "system", Content: "系统提示词"},
+		{Role: "user", Content: "第一轮问题", Status: "completed"},
+		{Role: "assistant", Content: "第一轮回答", Status: "completed"},
+		{Role: "assistant", Content: "还在生成的回答", Status: "pending"},
+		{Role: "tool", Content: "工具结果", Status: "completed"},
+		{Role: "user", Content: "后续目标变化", Status: "completed"},
+	}
+
+	got := buildConversationTitleMessages(messages)
+
+	if strings.Contains(got, "系统提示词") || strings.Contains(got, "工具结果") || strings.Contains(got, "还在生成的回答") {
+		t.Fatalf("expected title messages to include only completed user/assistant transcript, got %q", got)
+	}
+	if !strings.Contains(got, "user:\n第一轮问题") || !strings.Contains(got, "assistant:\n第一轮回答") || !strings.Contains(got, "user:\n后续目标变化") {
+		t.Fatalf("expected title messages to keep completed conversation content, got %q", got)
+	}
+}
+
+func TestBuildConversationTitleMessagesPrioritizesLatestTranscript(t *testing.T) {
+	messages := []model.Message{
+		{Role: "user", Content: strings.Repeat("很早以前的问题", 6000), Status: "completed"},
+		{Role: "assistant", Content: "很早以前的回答", Status: "completed"},
+		{Role: "user", Content: "最新目标是重新整理订阅方案", Status: "completed"},
+		{Role: "assistant", Content: "围绕最新目标继续分析", Status: "completed"},
+	}
+
+	got := buildConversationTitleMessages(messages)
+
+	if strings.Contains(got, "很早以前的问题") {
+		t.Fatalf("expected title messages to drop oldest content when over budget, got %q", got)
+	}
+	if !strings.Contains(got, "最新目标是重新整理订阅方案") || !strings.Contains(got, "围绕最新目标继续分析") {
+		t.Fatalf("expected title messages to keep latest transcript, got %q", got)
+	}
+}
+
+func TestConversationTitleFromMessagesPrefersLatestUserMessage(t *testing.T) {
+	messages := []model.Message{
+		{Role: "user", Content: "早期主题是部署配置", Status: "completed"},
+		{Role: "assistant", Content: "助手先说了一段话", Status: "completed"},
+		{Role: "user", Content: "最新主题是订阅方案", Status: "completed"},
+	}
+
+	if got := conversationTitleFromMessages(messages); got != "最新主题是订阅方案" {
+		t.Fatalf("expected fallback title from latest user message, got %q", got)
 	}
 }
 
@@ -108,6 +224,15 @@ func TestConversationMetadataFallsBackToFirstUserMessageTitle(t *testing.T) {
 func TestShouldAutoReplaceConversationTitleIncludesEnglishNewChat(t *testing.T) {
 	if !shouldAutoReplaceConversationTitle("New chat") {
 		t.Fatal("expected English localized new chat title to be replaceable")
+	}
+	if !shouldAutoReplaceConversationTitle("新对话") {
+		t.Fatal("expected Chinese localized new chat title to be replaceable")
+	}
+	if shouldAutoReplaceConversationTitle("新会话") {
+		t.Fatal("expected legacy Chinese title not to be replaceable")
+	}
+	if shouldAutoReplaceConversationTitle("") {
+		t.Fatal("expected empty title not to be treated as a localized placeholder")
 	}
 }
 
@@ -128,7 +253,7 @@ func TestConversationMetadataErrorDoesNotLeakWhenEitherTaskSucceeds(t *testing.T
 
 func TestShouldGenerateConversationMetadataAfterFailedFirstTurn(t *testing.T) {
 	conversation := model.Conversation{
-		Title:        "新会话",
+		Title:        "新对话",
 		LabelsJSON:   "[]",
 		MessageCount: 2,
 	}

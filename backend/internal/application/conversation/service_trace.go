@@ -43,6 +43,18 @@ const (
 	processTraceFallbackUnavailable = "unavailable"
 )
 
+const (
+	toolTracePreviewMaxChars = 260
+	toolTraceDetailMaxChars  = 4096
+)
+
+const (
+	upstreamThinkLiveFlushInterval = 80 * time.Millisecond
+	upstreamThinkLiveFlushBytes    = 1024
+	upstreamThinkPersistInterval   = 2 * time.Second
+	upstreamThinkLiveReplaceBytes  = 16 * 1024
+)
+
 type messageTraceDraft struct {
 	traceType       string
 	eventID         string
@@ -75,6 +87,14 @@ type messageTraceRecorder struct {
 	nextRoundSeq  int
 	eventCounters map[string]int
 	events        []model.MessageTraceEvent
+
+	upstreamThinkLastLiveFlush  time.Time
+	upstreamThinkLastPersist    time.Time
+	upstreamThinkPendingText    strings.Builder
+	upstreamThinkPendingReplace string
+	upstreamThinkPendingKind    string
+	upstreamThinkPendingReason  map[string]interface{}
+	upstreamThinkBufferedByte   int
 }
 
 func formatTraceStep(label string, detail string) string {
@@ -291,6 +311,7 @@ func (r *messageTraceRecorder) appendToolSection(summary string, markdown string
 	if value == "" {
 		return
 	}
+	r.completeProcess()
 	draft := r.ensureDraft(messageTraceTypeTools)
 	if draft == nil {
 		return
@@ -348,6 +369,7 @@ func (r *messageTraceRecorder) syncToolSection(summary string, markdown string, 
 	if value == "" {
 		return
 	}
+	r.completeProcess()
 	draft := r.ensureDraft(messageTraceTypeTools)
 	if draft == nil {
 		return
@@ -414,6 +436,7 @@ func (r *messageTraceRecorder) appendUpstreamReasoning(kind string, text string,
 	if text == "" {
 		return
 	}
+	r.completeProcess()
 
 	switch kind {
 	case messageTraceThinkKindSummary:
@@ -430,8 +453,7 @@ func (r *messageTraceRecorder) appendUpstreamReasoning(kind string, text string,
 		draft.status = messageTraceStatusStreaming
 	}
 	mergeUpstreamReasoningPayload(draft, kind, payload)
-	r.persistDraft(draft, false)
-	r.emitUpstreamThinkDelta(payload)
+	r.queueUpstreamThinkLiveUpdate(draft, kind, text, "", payload)
 }
 
 func (r *messageTraceRecorder) syncStructuredThink(content string, summary string, payload map[string]interface{}) {
@@ -441,10 +463,12 @@ func (r *messageTraceRecorder) syncStructuredThink(content string, summary strin
 	if content == "" && summary == "" {
 		return
 	}
+	r.completeProcess()
 	draft := r.ensureDraft(messageTraceTypeUpstreamThink)
 	if draft == nil {
 		return
 	}
+	previousContent := draft.contentMarkdown
 	displayContent := strings.TrimSpace(content)
 	if displayContent == "" {
 		displayContent = strings.TrimSpace(summary)
@@ -461,7 +485,8 @@ func (r *messageTraceRecorder) syncStructuredThink(content string, summary strin
 		draft.status = messageTraceStatusStreaming
 	}
 	mergeUpstreamReasoningPayload(draft, messageTraceThinkKindContent, payload)
-	r.persistDraft(draft, false)
+	deltaText, replaceText := diffUpstreamThinkContent(previousContent, draft.contentMarkdown)
+	r.queueUpstreamThinkLiveUpdate(draft, messageTraceThinkKindContent, deltaText, replaceText, payload)
 }
 
 // recordPromptTrace 把 PromptPlan 摘要合并进处理轨迹，供前端结构化展示。
@@ -497,7 +522,9 @@ func (r *messageTraceRecorder) completeDraft(draft *messageTraceDraft) bool {
 	if draft.traceType != messageTraceTypeTools {
 		r.upsertSnapshotEvent(draft, tracePayloadJSON(draft.payload))
 	}
-	go r.persistDraftBackground(cloneTraceDraft(draft))
+	if r.service != nil && r.service.repo != nil {
+		go r.persistDraftBackground(cloneTraceDraft(draft))
+	}
 	return true
 }
 
@@ -515,7 +542,7 @@ func (r *messageTraceRecorder) completeTools() {
 
 func (r *messageTraceRecorder) completeUpstreamThink() {
 	if r.completeDraft(r.upstreamThink) {
-		r.emitUpstreamThinkDelta(nil)
+		r.flushUpstreamThinkLiveUpdate(r.upstreamThink, true, false)
 	}
 }
 
@@ -650,6 +677,103 @@ func (r *messageTraceRecorder) persistDraftCtx(ctx context.Context, draft *messa
 	}
 }
 
+type upstreamThinkLiveUpdate struct {
+	kind            string
+	delta           string
+	contentMarkdown string
+	reasoning       map[string]interface{}
+}
+
+func (r *messageTraceRecorder) queueUpstreamThinkLiveUpdate(draft *messageTraceDraft, kind string, deltaText string, replaceText string, payload map[string]interface{}) {
+	if !r.enabled() || draft == nil {
+		return
+	}
+	if deltaText != "" {
+		r.upstreamThinkBufferedByte += len(deltaText)
+		if len(deltaText) > upstreamThinkLiveReplaceBytes {
+			deltaText = ""
+		}
+	}
+	if deltaText != "" {
+		_, _ = r.upstreamThinkPendingText.WriteString(deltaText)
+	}
+	if replaceText != "" {
+		r.upstreamThinkBufferedByte += len(replaceText)
+		if len(replaceText) <= upstreamThinkLiveReplaceBytes {
+			r.upstreamThinkPendingReplace = replaceText
+		}
+	}
+	if strings.TrimSpace(kind) != "" {
+		r.upstreamThinkPendingKind = strings.TrimSpace(kind)
+	}
+	if reasoning := liveUpstreamReasoningPayload(kind, payload); len(reasoning) > 0 {
+		r.upstreamThinkPendingReason = reasoning
+	}
+	if !r.shouldFlushUpstreamThinkLiveUpdate() {
+		return
+	}
+	r.flushUpstreamThinkLiveUpdate(draft, false, true)
+}
+
+func (r *messageTraceRecorder) shouldFlushUpstreamThinkLiveUpdate() bool {
+	if r == nil {
+		return false
+	}
+	if r.upstreamThinkLastLiveFlush.IsZero() {
+		return true
+	}
+	if r.upstreamThinkBufferedByte >= upstreamThinkLiveFlushBytes {
+		return true
+	}
+	return time.Since(r.upstreamThinkLastLiveFlush) >= upstreamThinkLiveFlushInterval
+}
+
+func (r *messageTraceRecorder) shouldPersistUpstreamThinkSnapshot() bool {
+	if r == nil {
+		return false
+	}
+	if !r.cfg.ProcessTracePersistInflight {
+		return false
+	}
+	if r.upstreamThinkLastPersist.IsZero() {
+		return true
+	}
+	return time.Since(r.upstreamThinkLastPersist) >= upstreamThinkPersistInterval
+}
+
+func (r *messageTraceRecorder) flushUpstreamThinkLiveUpdate(draft *messageTraceDraft, force bool, persistSnapshot bool) {
+	if !r.enabled() || draft == nil {
+		return
+	}
+	if persistSnapshot && r.shouldPersistUpstreamThinkSnapshot() {
+		r.persistDraft(draft, false)
+		r.upstreamThinkLastPersist = time.Now()
+	}
+	update := upstreamThinkLiveUpdate{
+		kind:            r.upstreamThinkPendingKind,
+		delta:           r.upstreamThinkPendingText.String(),
+		contentMarkdown: r.upstreamThinkPendingReplace,
+		reasoning:       r.upstreamThinkPendingReason,
+	}
+	if !force && update.delta == "" && update.contentMarkdown == "" && len(update.reasoning) == 0 {
+		return
+	}
+	r.emitUpstreamThinkDelta(update)
+	r.resetUpstreamThinkLiveBuffer()
+}
+
+func (r *messageTraceRecorder) resetUpstreamThinkLiveBuffer() {
+	if r == nil {
+		return
+	}
+	r.upstreamThinkLastLiveFlush = time.Now()
+	r.upstreamThinkPendingText.Reset()
+	r.upstreamThinkPendingReplace = ""
+	r.upstreamThinkPendingKind = ""
+	r.upstreamThinkPendingReason = nil
+	r.upstreamThinkBufferedByte = 0
+}
+
 func (r *messageTraceRecorder) persistMessageTraceRow(ctx context.Context, draft *messageTraceDraft, payloadJSON string) {
 	item := &model.MessageTrace{
 		MessageID:       r.assistant.ID,
@@ -780,17 +904,29 @@ func (r *messageTraceRecorder) emitToolUpdate() {
 	})
 }
 
-func (r *messageTraceRecorder) emitUpstreamThinkDelta(reasoning map[string]interface{}) {
+func (r *messageTraceRecorder) emitUpstreamThinkDelta(update upstreamThinkLiveUpdate) {
 	if !r.visible() || r.upstreamThink == nil {
 		return
 	}
 	payload := map[string]interface{}{
-		"status": r.upstreamThink.status,
-		"block":  traceDraftToBlock(r.upstreamThink),
-		"trace":  r.snapshot(),
+		"status":  r.upstreamThink.status,
+		"title":   r.upstreamThink.title,
+		"summary": r.upstreamThink.summary,
+		"stage":   r.upstreamThink.stage,
+		"roundID": r.upstreamThink.roundID,
+		"eventID": r.upstreamThink.eventID,
 	}
-	if len(reasoning) > 0 {
-		payload["reasoning"] = reasoning
+	if update.kind != "" {
+		payload["kind"] = update.kind
+	}
+	if update.delta != "" {
+		payload["delta"] = update.delta
+	}
+	if update.contentMarkdown != "" {
+		payload["contentMarkdown"] = update.contentMarkdown
+	}
+	if len(update.reasoning) > 0 {
+		payload["reasoning"] = update.reasoning
 	}
 	emitEvent(r.onEvent, "upstream_think_delta", payload)
 }
@@ -955,8 +1091,8 @@ func shouldMergeTraceToolCall(existing map[string]interface{}, incoming map[stri
 	if !sameTraceToolKind(existing, incoming) {
 		return false
 	}
-	existingInput := strings.TrimSpace(getTraceString(existing["input"]))
-	incomingInput := strings.TrimSpace(getTraceString(incoming["input"]))
+	existingInput := traceToolInputKey(existing)
+	incomingInput := traceToolInputKey(incoming)
 	if existingInput == "" || incomingInput == "" {
 		return true
 	}
@@ -991,6 +1127,10 @@ func cloneTraceToolCall(item map[string]interface{}) map[string]interface{} {
 
 func traceToolCallID(item map[string]interface{}) string {
 	return firstTraceString(item, "tool_call_id", "id", "call_id")
+}
+
+func traceToolInputKey(item map[string]interface{}) string {
+	return firstTraceString(item, "input_preview", "input")
 }
 
 func sameTraceToolKind(left map[string]interface{}, right map[string]interface{}) bool {
@@ -1065,8 +1205,8 @@ func toolTraceRowsFromPayload(payload map[string]interface{}) []model.ToolCall {
 			ToolName:   strings.TrimSpace(getTraceString(item["name"])),
 			Status:     strings.TrimSpace(getTraceString(item["status"])),
 			LatencyMS:  traceInt64(item["latency_ms"]),
-			InputJSON:  strings.TrimSpace(getTraceString(item["input"])),
-			OutputJSON: strings.TrimSpace(getTraceString(item["output"])),
+			InputJSON:  firstTraceString(item, "input_preview", "input"),
+			OutputJSON: firstTraceString(item, "output_preview", "output_text", "output"),
 			ErrorJSON:  strings.TrimSpace(getTraceString(item["error"])),
 		})
 	}
@@ -1183,6 +1323,34 @@ func getTraceString(value interface{}) string {
 	return text
 }
 
+func diffUpstreamThinkContent(previous string, next string) (string, string) {
+	if next == "" || next == previous {
+		return "", ""
+	}
+	if previous != "" && strings.HasPrefix(next, previous) {
+		return next[len(previous):], ""
+	}
+	if previous == "" {
+		return next, ""
+	}
+	return "", next
+}
+
+func liveUpstreamReasoningPayload(kind string, payload map[string]interface{}) map[string]interface{} {
+	reasoning := map[string]interface{}{}
+	if strings.TrimSpace(kind) != "" {
+		reasoning["kind"] = strings.TrimSpace(kind)
+	}
+	for _, key := range []string{"event_type", "item_id", "status"} {
+		if value, ok := payload[key]; ok {
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				reasoning[key] = strings.TrimSpace(text)
+			}
+		}
+	}
+	return reasoning
+}
+
 func mergeUpstreamReasoningPayload(draft *messageTraceDraft, kind string, payload map[string]interface{}) {
 	if draft == nil {
 		return
@@ -1267,8 +1435,7 @@ func buildAttachmentProcessTrace(
 		payload.FileNames = append(payload.FileNames, name)
 		ref := newAttachmentTraceFileRef(item, name)
 		payload.FileRefs = append(payload.FileRefs, ref)
-		kind := normalizeAttachmentKind(item.Kind, item.MimeType)
-		if kind == "image" {
+		if item.ContextMode == fileContextModeDirectImage {
 			payload.FileGroups.DirectImages = append(payload.FileGroups.DirectImages, name)
 			payload.FileGroupRefs.DirectImages = append(payload.FileGroupRefs.DirectImages, ref)
 			continue
@@ -1428,23 +1595,34 @@ func buildToolTrace(rows []model.ToolCall) (string, string, map[string]interface
 		if row.LatencyMS > 0 {
 			parts = append(parts, fmt.Sprintf("%dms", row.LatencyMS))
 		}
+		input := strings.TrimSpace(row.InputJSON)
+		output := strings.TrimSpace(row.OutputJSON)
+		inputDisplay := collapseWhitespace(input)
+		inputPreview := compactSnippet(inputDisplay, toolTracePreviewMaxChars)
+		outputPreview := toolOutputPreview(output)
+		inputDetail, inputTruncated := toolTraceDetail(input, toolTraceDetailMaxChars)
+		outputDetail, outputTruncated := toolTraceDetail(output, toolTraceDetailMaxChars)
 		if strings.TrimSpace(row.ErrorJSON) != "" {
-			parts = append(parts, compactSnippet(collapseWhitespace(strings.TrimSpace(row.ErrorJSON)), 260))
-		} else if preview := toolOutputPreview(row.OutputJSON); preview != "" {
-			parts = append(parts, "结果："+preview)
+			parts = append(parts, compactSnippet(collapseWhitespace(strings.TrimSpace(row.ErrorJSON)), toolTracePreviewMaxChars))
+		} else if outputPreview != "" {
+			parts = append(parts, "结果："+outputPreview)
 		}
 		lines = append(lines, formatTraceStep(toolName, joinTraceParts(parts...)))
 		toolCalls = append(toolCalls, map[string]interface{}{
-			"tool_call_id":   strings.TrimSpace(row.ToolCallID),
-			"name":           toolName,
-			"type":           strings.TrimSpace(row.ToolType),
-			"status":         status,
-			"latency_ms":     row.LatencyMS,
-			"error":          strings.TrimSpace(row.ErrorJSON),
-			"input":          strings.TrimSpace(row.InputJSON),
-			"output":         strings.TrimSpace(row.OutputJSON),
-			"output_text":    toolOutputText(row.OutputJSON),
-			"output_preview": toolOutputPreview(row.OutputJSON),
+			"tool_call_id":     strings.TrimSpace(row.ToolCallID),
+			"name":             toolName,
+			"type":             strings.TrimSpace(row.ToolType),
+			"status":           status,
+			"latency_ms":       row.LatencyMS,
+			"error":            strings.TrimSpace(row.ErrorJSON),
+			"input_preview":    inputPreview,
+			"input_detail":     inputDetail,
+			"input_size":       len(input),
+			"input_truncated":  inputTruncated,
+			"output_preview":   outputPreview,
+			"output_detail":    outputDetail,
+			"output_size":      len(output),
+			"output_truncated": outputTruncated,
 		})
 	}
 	summary := fmt.Sprintf("%d 次工具调用已完成", len(rows))
@@ -1468,57 +1646,31 @@ func toolOutputPreview(raw string) string {
 	var payload interface{}
 	if err := json.Unmarshal([]byte(value), &payload); err == nil {
 		if text := readableMCPToolResultPreview(payload); text != "" {
-			return compactSnippet(collapseWhitespace(text), 260)
+			return compactSnippet(collapseWhitespace(text), toolTracePreviewMaxChars)
 		}
 		if text := readableJSONPreview(payload); text != "" {
-			return compactSnippet(collapseWhitespace(text), 260)
+			return compactSnippet(collapseWhitespace(text), toolTracePreviewMaxChars)
 		}
 		if normalized, marshalErr := json.Marshal(payload); marshalErr == nil {
 			value = string(normalized)
 		}
 	}
-	return compactSnippet(collapseWhitespace(value), 260)
+	return compactSnippet(collapseWhitespace(value), toolTracePreviewMaxChars)
 }
 
-func toolOutputText(raw string) string {
+func toolTraceDetail(raw string, maxChars int) (string, bool) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
-		return ""
+		return "", false
 	}
-	var payload interface{}
-	if err := json.Unmarshal([]byte(value), &payload); err != nil {
-		return value
+	runes := []rune(value)
+	if maxChars <= 0 {
+		maxChars = toolTraceDetailMaxChars
 	}
-	if text := readableMCPToolResultText(payload); text != "" {
-		return text
+	if len(runes) <= maxChars {
+		return value, false
 	}
-	if text := readableJSONPreview(payload); text != "" {
-		return text
-	}
-	if formatted, err := json.MarshalIndent(payload, "", "  "); err == nil {
-		return string(formatted)
-	}
-	return value
-}
-
-func readableMCPToolResultText(value interface{}) string {
-	payload, ok := value.(map[string]interface{})
-	if !ok || !looksLikeMCPToolResult(payload) {
-		return ""
-	}
-	parts := make([]string, 0, 2)
-	if text := readableMCPContentText(payload["content"]); text != "" {
-		parts = append(parts, text)
-	}
-	if structured, ok := payload["structuredContent"]; ok {
-		if formatted, err := json.MarshalIndent(structured, "", "  "); err == nil && strings.TrimSpace(string(formatted)) != "" {
-			parts = append(parts, string(formatted))
-		}
-	}
-	if len(parts) == 0 {
-		return summarizeMCPContent(payload["content"])
-	}
-	return strings.Join(parts, "\n\n")
+	return compactSnippet(collapseWhitespace(value), maxChars), true
 }
 
 func readableMCPToolResultPreview(value interface{}) string {
@@ -1540,24 +1692,6 @@ func readableMCPToolResultPreview(value interface{}) string {
 		}
 	}
 	return strings.Join(parts, "；")
-}
-
-func readableMCPContentText(value interface{}) string {
-	items, ok := value.([]interface{})
-	if !ok || len(items) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(items))
-	for _, item := range items {
-		block, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if text := stringFromJSONValue(block["text"]); text != "" {
-			parts = append(parts, text)
-		}
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 func looksLikeMCPToolResult(payload map[string]interface{}) bool {

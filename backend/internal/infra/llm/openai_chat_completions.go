@@ -35,6 +35,7 @@ func (a *openAIChatCompletionsAdapter) ListModels(ctx context.Context, route Rou
 }
 
 func buildChatCompletionsRequestBody(
+	adapter string,
 	model string,
 	input GenerateInput,
 	messages []Message,
@@ -45,7 +46,7 @@ func buildChatCompletionsRequestBody(
 ) map[string]interface{} {
 	items := make([]map[string]interface{}, 0, len(messages))
 	for _, item := range messages {
-		items = append(items, buildChatCompletionsMessages(item)...)
+		items = append(items, buildChatCompletionsMessages(adapter, item)...)
 	}
 	payload := map[string]interface{}{
 		"model":    strings.TrimSpace(model),
@@ -156,7 +157,7 @@ func normalizedChatCompletionResponseFormat(options map[string]interface{}) (int
 	}, true
 }
 
-func buildChatCompletionsMessages(msg Message) []map[string]interface{} {
+func buildChatCompletionsMessages(adapter string, msg Message) []map[string]interface{} {
 	result := make([]map[string]interface{}, 0, 1+len(msg.ToolResults))
 	if len(msg.ToolResults) > 0 {
 		for _, item := range msg.ToolResults {
@@ -174,7 +175,11 @@ func buildChatCompletionsMessages(msg Message) []map[string]interface{} {
 		"content": buildChatCompletionsContent(msg),
 	}
 	if reasoningContent := strings.TrimSpace(msg.ReasoningContent); reasoningContent != "" && normalizeRole(msg.Role) == "assistant" {
-		payload["reasoning_content"] = reasoningContent
+		if NormalizeAdapter(adapter) == AdapterOpenRouterChat {
+			payload["reasoning"] = reasoningContent
+		} else {
+			payload["reasoning_content"] = reasoningContent
+		}
 	}
 	if len(msg.ToolCalls) > 0 {
 		payload["tool_calls"] = buildChatCompletionsToolCalls(msg.ToolCalls)
@@ -266,6 +271,7 @@ func applyChatStreamEvent(
 	parsed map[string]interface{},
 	result *GenerateOutput,
 	onEvent func(GenerateStreamEvent) error,
+	allowTextEncodedToolCalls bool,
 ) error {
 	if responseID := strings.TrimSpace(getString(parsed["id"])); responseID != "" {
 		result.ResponseID = responseID
@@ -273,14 +279,12 @@ func applyChatStreamEvent(
 
 	delta := extractChatStreamDelta(parsed)
 	if delta != "" {
-		result.Text += delta
-		if onEvent != nil {
-			if err := onEvent(GenerateStreamEvent{
-				Delta:      delta,
-				ResponseID: result.ResponseID,
-			}); err != nil {
+		if allowTextEncodedToolCalls {
+			if err := bufferChatVisibleDelta(result, delta, onEvent); err != nil {
 				return err
 			}
+		} else if err := emitChatVisibleDelta(result, delta, onEvent); err != nil {
+			return err
 		}
 	}
 	if reasoning := extractChatStreamReasoningDelta(parsed); reasoning != nil && reasoning.Text != "" {
@@ -359,7 +363,7 @@ func mergeChatStreamToolCalls(parsed map[string]interface{}, result *GenerateOut
 	}
 }
 
-func parseChatCompletionsOutput(adapter string, parsed map[string]interface{}, result *GenerateOutput) {
+func parseChatCompletionsOutput(adapter string, parsed map[string]interface{}, result *GenerateOutput, allowTextEncodedToolCalls bool) {
 	choice := firstMapItem(asSlice(parsed["choices"]))
 	message := asMap(choice["message"])
 	result.Text = extractChatVisibleContentText(message["content"])
@@ -370,6 +374,9 @@ func parseChatCompletionsOutput(adapter string, parsed map[string]interface{}, r
 	toolCalls := parseChatToolCalls(message["tool_calls"])
 	if len(toolCalls) > 0 {
 		result.ToolCalls = append(result.ToolCalls, toolCalls...)
+	}
+	if allowTextEncodedToolCalls {
+		applyTextEncodedToolCalls(result)
 	}
 }
 
@@ -464,6 +471,73 @@ func extractChatVisibleContentText(raw interface{}) string {
 	}
 }
 
+func bufferChatVisibleDelta(result *GenerateOutput, delta string, onEvent func(GenerateStreamEvent) error) error {
+	if result == nil || delta == "" {
+		return nil
+	}
+	result.chatTextBuffer += delta
+	return flushChatVisibleBuffer(result, onEvent, false)
+}
+
+// flushChatVisibleBuffer 在 DeepSeek DSML 模式下延迟释放可见文本，确保完整工具调用不会作为普通文本输出。
+func flushChatVisibleBuffer(result *GenerateOutput, onEvent func(GenerateStreamEvent) error, final bool) error {
+	if result == nil || result.chatTextBuffer == "" {
+		return nil
+	}
+	if cleanText, toolCalls, ok := parseDSMLToolCalls(result.chatTextBuffer); ok {
+		result.chatTextBuffer = ""
+		result.ToolCalls = append(result.ToolCalls, toolCalls...)
+		if cleanText == "" {
+			return nil
+		}
+		return emitChatVisibleDelta(result, cleanText, onEvent)
+	}
+	if !final && maybeDSMLToolCallsPrefix(result.chatTextBuffer) {
+		return nil
+	}
+	if final && maybeDSMLToolCallsPrefix(result.chatTextBuffer) {
+		return errDeepSeekDSMLToolCallsIncomplete
+	}
+	text := result.chatTextBuffer
+	result.chatTextBuffer = ""
+	return emitChatVisibleDelta(result, text, onEvent)
+}
+
+// emitChatVisibleDelta 统一写入可见文本并发送流式增量事件。
+func emitChatVisibleDelta(result *GenerateOutput, delta string, onEvent func(GenerateStreamEvent) error) error {
+	if delta == "" {
+		return nil
+	}
+	result.Text += delta
+	if onEvent == nil {
+		return nil
+	}
+	return onEvent(GenerateStreamEvent{
+		Delta:      delta,
+		ResponseID: result.ResponseID,
+	})
+}
+
+// maybeDSMLToolCallsPrefix 只识别 DeepSeek DSML tool_calls 的起始片段，用于流式等待更多 chunk。
+func maybeDSMLToolCallsPrefix(text string) bool {
+	value := strings.ToLower(strings.TrimLeft(strings.TrimSpace(text), "\ufeff"))
+	if value == "" {
+		return false
+	}
+	targets := []string{
+		"<｜dsml｜tool_calls",
+		"<｜｜dsml｜｜tool_calls",
+		"<||dsml||tool_calls",
+		"<|dsml|tool_calls",
+	}
+	for _, target := range targets {
+		if strings.HasPrefix(target, value) || strings.HasPrefix(value, target) {
+			return true
+		}
+	}
+	return false
+}
+
 func extractChatReasoningContentText(raw interface{}) string {
 	switch value := raw.(type) {
 	case []interface{}:
@@ -548,6 +622,7 @@ func parseOpenAICompatibleUsageForAdapter(adapter string, parsed map[string]inte
 		),
 		ReasoningTokens: reasoningTokens,
 		ServiceTier:     strings.TrimSpace(getString(parsed["service_tier"])),
+		RawUsageJSON:    rawUsageJSONFromPath(parsed, "usage"),
 	}
 }
 

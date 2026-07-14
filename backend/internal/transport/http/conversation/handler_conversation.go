@@ -1,9 +1,12 @@
 package conversation
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	appconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/response"
@@ -65,6 +68,7 @@ func (h *Handler) CreateConversation(c *gin.Context) {
 // @Param starred query string false "星标筛选: all|starred|unstarred"
 // @Param share query string false "分享筛选: all|shared|unshared"
 // @Param project query string false "项目筛选: all|unassigned|项目 public_id"
+// @Param q query string false "搜索关键词，匹配会话元数据、项目名称和消息正文"
 // @Success 200 {object} ConversationListResponseDoc
 // @Failure 500 {object} ErrorDoc
 // @Router /conversations [get]
@@ -76,8 +80,9 @@ func (h *Handler) ListConversations(c *gin.Context) {
 	starredFilter := normalizeConversationStarredFilter(c.Query("starred"))
 	shareFilter := normalizeConversationShareFilter(c.Query("share"))
 	projectFilter := normalizeConversationProjectQuery(c.Query("project"))
+	searchQuery := c.Query("q")
 
-	items, total, err := h.service.ListConversations(c.Request.Context(), userID, page, pageSize, statusFilter, starredFilter, shareFilter, projectFilter)
+	items, total, err := h.service.ListConversations(c.Request.Context(), userID, page, pageSize, statusFilter, starredFilter, shareFilter, projectFilter, searchQuery)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "list conversations failed")
 		return
@@ -87,6 +92,28 @@ func (h *Handler) ListConversations(c *gin.Context) {
 		results = append(results, toConversationResponse(&items[i]))
 	}
 	response.SuccessPage(c, total, results)
+}
+
+// GetConversationDefaultModelCandidate godoc
+// @Summary 查询新会话默认模型候选
+// @Description 返回后台配置的新会话系统推荐模型；未配置时返回空候选
+// @Tags chat
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} ConversationDefaultModelCandidateResponseDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /conversations/default-model-candidate [get]
+func (h *Handler) GetConversationDefaultModelCandidate(c *gin.Context) {
+	if systemDefaultModel := h.service.GetConversationSystemDefaultModel(); systemDefaultModel != "" {
+		response.Success(c, ConversationDefaultModelCandidateResponse{
+			PlatformModelName: systemDefaultModel,
+			Source:            "system_default",
+		})
+		return
+	}
+
+	response.Success(c, ConversationDefaultModelCandidateResponse{})
 }
 
 // GetConversation godoc
@@ -163,6 +190,84 @@ func (h *Handler) ExportConversation(c *gin.Context) {
 	response.Success(c, toConversationExportResponse(item))
 }
 
+type userExportManifest struct {
+	Type      string `json:"_type"`
+	Complete  bool   `json:"complete"`
+	Exported  int64  `json:"exported"`
+	Failed    int    `json:"failed"`
+	FailedIDs []uint `json:"failedIDs,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ExportAllConversations godoc
+// @Summary 导出当前用户全部对话
+// @Description 流式导出当前用户全部会话及消息为 NDJSON 文件
+// @Tags chat
+// @Produce application/x-ndjson
+// @Security BearerAuth
+// @Success 200 {string} string "NDJSON stream"
+// @Failure 500 {object} ErrorDoc
+// @Router /conversations/export [get]
+func (h *Handler) ExportAllConversations(c *gin.Context) {
+	userID := middleware.MustUserID(c)
+
+	h.recordAudit(c, "export_all_conversations", "conversation", "", map[string]interface{}{"scope": "user"})
+
+	c.Header("Content-Type", "application/x-ndjson")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="my-conversations-%s.jsonl"`, time.Now().UTC().Format("20060102-150405")))
+	c.Header("Cache-Control", "no-store")
+	c.Status(http.StatusOK)
+
+	const batchSize = 50
+	var lastID uint
+	encoder := json.NewEncoder(c.Writer)
+	exported := int64(0)
+	var failedIDs []uint
+	writeManifest := func(complete bool, exportErr string) {
+		_ = encoder.Encode(userExportManifest{
+			Type:      "export_manifest",
+			Complete:  complete,
+			Exported:  exported,
+			Failed:    len(failedIDs),
+			FailedIDs: failedIDs,
+			Error:     exportErr,
+		})
+		c.Writer.Flush()
+	}
+
+	for {
+		if c.Request.Context().Err() != nil {
+			return
+		}
+		conversations, err := h.service.ListUserConversationsAfterID(c.Request.Context(), userID, lastID, batchSize)
+		if err != nil {
+			writeManifest(false, "failed to list conversations")
+			return
+		}
+		if len(conversations) == 0 {
+			break
+		}
+		for i := range conversations {
+			result, err := h.service.ExportUserConversationData(c.Request.Context(), userID, &conversations[i])
+			if err != nil {
+				failedIDs = append(failedIDs, conversations[i].ID)
+				continue
+			}
+			if err := encoder.Encode(ToConversationExportResponse(result)); err != nil {
+				return
+			}
+			exported++
+		}
+		c.Writer.Flush()
+		lastID = conversations[len(conversations)-1].ID
+		if len(conversations) < batchSize {
+			break
+		}
+	}
+
+	writeManifest(true, "")
+}
+
 // RenameConversation godoc
 // @Summary 重命名会话
 // @Description 修改指定会话标题
@@ -207,6 +312,51 @@ func (h *Handler) RenameConversation(c *gin.Context) {
 	}
 
 	h.recordAudit(c, "rename_conversation",
+		"conversation",
+		item.PublicID,
+		map[string]string{"title": item.Title},
+	)
+
+	response.Success(c, toConversationResponse(item))
+}
+
+// RegenerateConversationTitle godoc
+// @Summary 自动重新命名会话
+// @Description 根据指定会话已有内容重新生成标题
+// @Tags chat
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "会话 public_id"
+// @Success 200 {object} ConversationUpdateResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 500 {object} ErrorDoc
+// @Router /conversations/{id}/title/regenerate [post]
+func (h *Handler) RegenerateConversationTitle(c *gin.Context) {
+	userID := middleware.MustUserID(c)
+	publicID, err := stringParam(c, "id")
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid conversation id")
+		return
+	}
+
+	item, err := h.service.RegenerateConversationTitle(c.Request.Context(), userID, publicID)
+	if err != nil {
+		switch {
+		case errors.Is(err, appconversation.ErrInvalidConversationTitle):
+			response.Error(c, http.StatusBadRequest, "conversation has no titleable content")
+			return
+		case errors.Is(err, appconversation.ErrConversationNotFound):
+			response.Error(c, http.StatusNotFound, "conversation not found")
+			return
+		default:
+			response.Error(c, http.StatusInternalServerError, "regenerate conversation title failed")
+			return
+		}
+	}
+
+	h.recordAudit(c, "regenerate_conversation_title",
 		"conversation",
 		item.PublicID,
 		map[string]string{"title": item.Title},

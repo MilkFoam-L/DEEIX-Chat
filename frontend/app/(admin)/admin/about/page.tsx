@@ -1,10 +1,5 @@
-import { AdminShell } from "@/features/admin/components/admin-shell";
-import { AdminAboutPage } from "@/features/admin/components/sections/admin-about";
+import { AdminAboutPage } from "@/features/admin/components/sections/about/admin-about";
 
 export default function Page() {
-  return (
-    <AdminShell activeSection="about" basePath="/admin">
-      <AdminAboutPage />
-    </AdminShell>
-  );
+  return <AdminAboutPage />;
 }

@@ -23,10 +23,13 @@ func TestResolveMessageSystemPromptInjectionUsesNativeSystemPrompt(t *testing.T)
 	if got.InlineToUser {
 		t.Fatal("expected native system prompt")
 	}
-	for _, want := range []string{`<layers order="high_to_low">`, `<platform p="100">`, "global rule", `<model p="80">`, "model rule", `<project p="50" override="no">`, "project rule"} {
+	for _, want := range []string{`<layers order="high_to_low">`, `<platform p="100">`, "global rule", `<model p="80">`, "model rule", `<project p="60" override="no">`, "project rule"} {
 		if !strings.Contains(got.Content, want) {
 			t.Fatalf("expected content to contain %q, got %q", want, got.Content)
 		}
+	}
+	if !strings.Contains(got.Content, "not a compliance percentage") {
+		t.Fatalf("expected priority semantics to be explicit, got %q", got.Content)
 	}
 	if strings.Contains(got.Content, "# Global instructions") {
 		t.Fatalf("expected XML prompt layers, got %q", got.Content)
@@ -45,7 +48,7 @@ func TestResolveMessageSystemPromptInjectionAddsHTMLVisualPrompt(t *testing.T) {
 	if got.InlineToUser {
 		t.Fatal("expected native system prompt")
 	}
-	for _, want := range []string{`<format p="30" scope="request">`, "html-visual", "遵循用户语言", "HTML 实时渲染"} {
+	for _, want := range []string{`<format p="100" scope="request">`, "html-visual", "遵循用户语言", "HTML 实时渲染"} {
 		if !strings.Contains(got.Content, want) {
 			t.Fatalf("expected content to contain %q, got %q", want, got.Content)
 		}
@@ -75,13 +78,29 @@ func TestResolveMessageSystemPromptInjectionOrdersProjectBeforeResponseFormat(t 
 	}
 
 	got := resolveMessageSystemPromptInjection(config.Config{}, route, "project rule", true, "")
-	projectIndex := strings.Index(got.Content, `<project p="50" override="no">`)
-	responseIndex := strings.Index(got.Content, `<format p="30" scope="request">`)
+	projectIndex := strings.Index(got.Content, `<project p="100" override="no">`)
+	responseIndex := strings.Index(got.Content, `<format p="80" scope="request">`)
 	if projectIndex < 0 || responseIndex < 0 {
 		t.Fatalf("expected project and response format layers, got %q", got.Content)
 	}
 	if projectIndex > responseIndex {
 		t.Fatalf("expected project instructions before response format instructions, got %q", got.Content)
+	}
+}
+
+func TestResolveMessageSystemPromptInjectionCompactsActiveLayerPriorities(t *testing.T) {
+	route := &channel.ResolvedRoute{
+		Protocol: llm.AdapterOpenAIResponses,
+	}
+
+	got := resolveMessageSystemPromptInjection(config.Config{DefaultSystemPrompt: "global rule"}, route, "project rule", true, "")
+	for _, want := range []string{`<platform p="100">`, `<project p="80" override="no">`, `<format p="60" scope="request">`} {
+		if !strings.Contains(got.Content, want) {
+			t.Fatalf("expected compacted active priority %q, got %q", want, got.Content)
+		}
+	}
+	if strings.Contains(got.Content, `p="40"`) {
+		t.Fatalf("expected no skipped priority slot when model layer is empty, got %q", got.Content)
 	}
 }
 
@@ -91,7 +110,7 @@ func TestResolveMessageSystemPromptInjectionMarksProjectOverrideBoundary(t *test
 	}
 
 	got := resolveMessageSystemPromptInjection(config.Config{}, route, "project rule", false, "")
-	for _, want := range []string{`<project p="50" override="no">`, "must not override platform or model instructions"} {
+	for _, want := range []string{`<project p="100" override="no">`, "must not override platform or model instructions"} {
 		if !strings.Contains(got.Content, want) {
 			t.Fatalf("expected project boundary %q, got %q", want, got.Content)
 		}

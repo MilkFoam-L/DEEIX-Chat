@@ -1,5 +1,5 @@
 import { clearSessionSnapshot, readAccessToken, readSessionRevision, writeSessionSnapshot } from "@/shared/auth/session";
-import { apiRequest, ApiError, resolveApiBaseURL, type ApiRequestOptions } from "@/shared/api/http-client";
+import { apiRequest, ApiError, ApiNetworkError, resolveApiBaseURL, type ApiRequestOptions } from "@/shared/api/http-client";
 import type { ApiEnvelope } from "@/shared/api/common.types";
 import type { LoginData } from "@/shared/api/auth.types";
 
@@ -57,8 +57,9 @@ async function requestAccessTokenRefresh(): Promise<string> {
       if (readSessionRevision() === startedRevision) {
         clearSessionSnapshot({ syncPeers: false });
       }
+      return "";
     }
-    return "";
+    throw error;
   }
 }
 
@@ -173,7 +174,12 @@ export async function authedFetch(
   allowRefresh = true,
 ): Promise<Response> {
   const endpoint = `${resolveApiBaseURL()}${path}`;
-  const response = await fetch(endpoint, buildAuthedFetchInit(options));
+  let response: Response;
+  try {
+    response = await fetch(endpoint, buildAuthedFetchInit(options));
+  } catch (error) {
+    throw new ApiNetworkError(error);
+  }
   if (response.ok) {
     return response;
   }
@@ -188,13 +194,18 @@ export async function authedFetch(
     throw await toApiError(response);
   }
 
-  const retryResponse = await fetch(
-    endpoint,
-    buildAuthedFetchInit({
-      ...options,
-      accessToken: refreshedToken,
-    }),
-  );
+  let retryResponse: Response;
+  try {
+    retryResponse = await fetch(
+      endpoint,
+      buildAuthedFetchInit({
+        ...options,
+        accessToken: refreshedToken,
+      }),
+    );
+  } catch (error) {
+    throw new ApiNetworkError(error);
+  }
   if (!retryResponse.ok) {
     const retryError = await toApiError(retryResponse);
     if (isSessionTerminatingAuthError(retryError)) {

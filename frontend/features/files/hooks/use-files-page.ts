@@ -10,7 +10,7 @@ import { useFileExtract } from "@/features/files/hooks/use-file-extract";
 import { useFileInvalidation } from "@/features/files/hooks/use-file-invalidation";
 import { useFilePreview } from "@/features/files/hooks/use-file-preview";
 import type { FileFilterValue, FileSortKey } from "@/features/files/types/files";
-import { resolveFileFilter } from "@/features/files/utils/file-display";
+import { resolveFileFilter } from "@/shared/lib/file-display";
 import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
 import {
   deleteFile,
@@ -20,7 +20,8 @@ import {
   uploadFile,
 } from "@/shared/api/file";
 import type { FileObjectDTO, UploadFileResult, UserStorageQuotaDTO } from "@/shared/api/file.types";
-import { patchByID, removeByID, replaceByID, restoreAt, upsertByID } from "@/shared/lib/optimistic-list";
+import { runBulkActionInChunks } from "@/shared/lib/bulk-action";
+import { patchByID, replaceByID, upsertByID } from "@/shared/lib/optimistic-list";
 
 const FILES_PAGE_SIZE = 100;
 
@@ -109,6 +110,7 @@ export function useFilesPage(): UseFilesPageResult {
   const totalRef = React.useRef(0);
   const isMountedRef = React.useRef(false);
   const loadRequestSeqRef = React.useRef(0);
+  const hasLoadedOnceRef = React.useRef(false);
 
   const [files, setFiles] = React.useState<FileObjectDTO[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -198,13 +200,14 @@ export function useFilesPage(): UseFilesPageResult {
         setLoading(false);
         setLoadingMore(false);
         setSyncing(false);
+        hasLoadedOnceRef.current = true;
         toast.error(t("toasts.sessionExpired"), { description: t("toasts.viewAfterLogin") });
         return;
       }
 
       if (options.append) {
         setLoadingMore(true);
-      } else if (options.silent) {
+      } else if (options.silent || hasLoadedOnceRef.current) {
         if (!options.background) {
           setSyncing(true);
         }
@@ -225,9 +228,11 @@ export function useFilesPage(): UseFilesPageResult {
         }
 
         const currentFiles = filesRef.current;
-        let nextItems = options.append
-          ? [...currentFiles, ...data.results.filter((item) => !currentFiles.some((current) => current.fileID === item.fileID))]
-          : data.results;
+        let nextItems = data.results;
+        if (options.append) {
+          const currentFileIDs = new Set(currentFiles.map((item) => item.fileID));
+          nextItems = [...currentFiles, ...data.results.filter((item) => !currentFileIDs.has(item.fileID))];
+        }
         const explicitPreferredFileID = options.preferredFileID?.trim() || "";
         if (options.ensurePreferred && explicitPreferredFileID && !nextItems.some((item) => item.fileID === explicitPreferredFileID)) {
           const preferredData = await listFiles(token, {
@@ -270,6 +275,7 @@ export function useFilesPage(): UseFilesPageResult {
         if (!isMountedRef.current || !isLatestRequest()) {
           return;
         }
+        hasLoadedOnceRef.current = true;
         setLoading(false);
         setLoadingMore(false);
         setSyncing(false);
@@ -371,6 +377,7 @@ export function useFilesPage(): UseFilesPageResult {
           const reusedCount = successResults.filter((item) => item.reused).length;
           const uploadedCount = successResults.length - reusedCount;
           const currentFileIDs = new Set(filesRef.current.map((item) => item.fileID));
+          const normalizedQuery = debouncedQuery.toLowerCase();
           const seenUploadedFileIDs = new Set<string>();
           const nextUploadedFiles = successResults
             .map((item) => item.file)
@@ -379,7 +386,7 @@ export function useFilesPage(): UseFilesPageResult {
                 return false;
               }
               seenUploadedFileIDs.add(item.fileID);
-              if (debouncedQuery && !item.fileName.toLowerCase().includes(debouncedQuery.toLowerCase())) {
+              if (normalizedQuery && !item.fileName.toLowerCase().includes(normalizedQuery)) {
                 return false;
               }
               return filterKeys.length === 0 || filterKeys.includes(resolveFileFilter(item) as FileFilterValue);
@@ -434,38 +441,23 @@ export function useFilesPage(): UseFilesPageResult {
       }
 
       setDeletingFileID(fileID);
-      const previousFiles = filesRef.current;
-      const previousTotal = totalRef.current;
-      const deletedFile = previousFiles.find((item) => item.fileID === fileID) ?? null;
-      const deletedIndex = previousFiles.findIndex((item) => item.fileID === fileID);
-      const nextFiles = removeByID(previousFiles, fileID, (item) => item.fileID);
-      const optimisticSelectedFileID = nextFiles[deletedIndex]?.fileID ?? nextFiles[deletedIndex - 1]?.fileID ?? nextFiles[0]?.fileID ?? null;
-      filesRef.current = nextFiles;
-      setFiles(nextFiles);
-      setTotal((current) => Math.max(0, current - (deletedIndex >= 0 ? 1 : 0)));
-      if (selectedFileID === fileID) {
-        setSelectedFileID(optimisticSelectedFileID);
-      }
       try {
         const result = await deleteFile(token, fileID);
+        const currentFiles = filesRef.current;
+        const deletedIndex = currentFiles.findIndex((item) => item.fileID === fileID);
+        const nextFiles = currentFiles.filter((item) => item.fileID !== fileID);
+        const nextSelectedFileID = nextFiles[deletedIndex]?.fileID ?? nextFiles[deletedIndex - 1]?.fileID ?? nextFiles[0]?.fileID ?? null;
+
+        filesRef.current = nextFiles;
+        setFiles(nextFiles);
+        setTotal((current) => Math.max(0, current - (deletedIndex >= 0 ? 1 : 0)));
+        if (selectedFileID === fileID) {
+          setSelectedFileID(nextSelectedFileID);
+        }
         setQuota(result.quota);
-        void loadFiles({ preferredFileID: selectedFileID === fileID ? null : selectedFileID, silent: true, background: true });
+        void loadFiles({ preferredFileID: selectedFileID === fileID ? nextSelectedFileID : selectedFileID, silent: true, background: true });
         toast.success(t("toasts.deleteSucceeded"));
       } catch (error) {
-        if (deletedFile) {
-          setFiles((current) => {
-            const restored = restoreAt(current, deletedFile, deletedIndex, (item) => item.fileID);
-            filesRef.current = restored;
-            return restored;
-          });
-          setTotal((current) => Math.max(current, previousTotal));
-        }
-        setSelectedFileID((current) => {
-          if (selectedFileID === fileID && current === optimisticSelectedFileID) {
-            return fileID;
-          }
-          return current ?? selectedFileID;
-        });
         const description = resolveErrorMessage(error, t("toasts.deleteFailed"));
         toast.error(t("toasts.deleteFailed"), { description });
       } finally {
@@ -509,7 +501,8 @@ export function useFilesPage(): UseFilesPageResult {
   }, [bulkDeleting]);
 
   const onConfirmBulkDelete = React.useCallback(async () => {
-    const fileIDs = selectedFileIDs.filter((fileID) => filesRef.current.some((item) => item.fileID === fileID));
+    const visibleFileIDs = new Set(filesRef.current.map((item) => item.fileID));
+    const fileIDs = selectedFileIDs.filter((fileID) => visibleFileIDs.has(fileID));
     if (fileIDs.length === 0) {
       setBulkDeleteOpen(false);
       return;
@@ -524,15 +517,22 @@ export function useFilesPage(): UseFilesPageResult {
     let successCount = 0;
     let failedCount = 0;
     let latestQuota: UserStorageQuotaDTO | null = null;
-    for (const fileID of fileIDs) {
-      try {
-        const result = await deleteFile(token, fileID);
-        latestQuota = result.quota;
-        successCount += 1;
-      } catch {
-        failedCount += 1;
+    await runBulkActionInChunks({
+      chunkSize: 10,
+      items: fileIDs,
+      title: t("bulkDeleteDialog.title"),
+      runChunk: async (chunk) => {
+        for (const fileID of chunk) {
+          try {
+            const result = await deleteFile(token, fileID);
+            latestQuota = result.quota;
+            successCount += 1;
+          } catch {
+            failedCount += 1;
+          }
+        }
       }
-    }
+    });
 
     if (latestQuota) {
       setQuota(latestQuota);
@@ -540,10 +540,11 @@ export function useFilesPage(): UseFilesPageResult {
     setSelectedFileIDs([]);
     setBulkDeleteOpen(false);
     setBulkDeleting(false);
-    if (fileIDs.includes(selectedFileID ?? "")) {
+    const selectedFileDeleted = selectedFileID ? fileIDs.includes(selectedFileID) : false;
+    if (selectedFileDeleted) {
       setSelectedFileID(null);
     }
-    await loadFiles({ preferredFileID: fileIDs.includes(selectedFileID ?? "") ? null : selectedFileID, silent: true, background: true });
+    await loadFiles({ preferredFileID: selectedFileDeleted ? null : selectedFileID, silent: true, background: true });
 
     if (failedCount > 0) {
       toast.error(t("toasts.bulkDeletePartialFailed"), {

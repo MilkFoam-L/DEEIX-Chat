@@ -56,11 +56,25 @@ func DefaultModelOptionAllowedPathsJSON() string {
     "thinking.type",
     "stream_options.include_usage"
   ],
+  "openrouter_chat_completions": [
+    "presence_penalty",
+    "frequency_penalty",
+    "reasoning_effort",
+    "reasoning.effort",
+    "reasoning.summary",
+    "verbosity",
+    "thinking.type",
+    "stream_options.include_usage"
+  ],
   "openai_responses": [
     "service_tier",
     "reasoning.effort",
     "reasoning.summary",
     "text.verbosity"
+  ],
+  "openrouter_responses": [
+    "reasoning.effort",
+    "reasoning.summary"
   ],
   "openai_image_generations": [
     "background",
@@ -91,6 +105,22 @@ func DefaultModelOptionAllowedPathsJSON() string {
     "generationConfig.responseModalities",
     "generationConfig.imageConfig.aspectRatio",
     "generationConfig.imageConfig.imageSize"
+  ],
+  "gemini_interactions": [
+    "generation_config.temperature",
+    "generation_config.top_p",
+    "generation_config.max_output_tokens",
+    "generation_config.thinking_level",
+    "response_format.type",
+    "response_format.aspect_ratio",
+    "response_format.image_size",
+    "response_format.mime_type",
+    "responseFormat.type",
+    "responseFormat.aspectRatio",
+    "responseFormat.imageSize",
+    "responseFormat.mimeType",
+    "generationConfig.videoConfig.task",
+    "generation_config.video_config.task"
   ],
   "anthropic_messages": [
     "speed",
@@ -171,6 +201,7 @@ type yamlConfig struct {
 		TurnstileSiteverifyURL string `yaml:"turnstile_siteverify_url"`
 	} `yaml:"security"`
 	Database struct {
+		Driver   string `yaml:"driver"`
 		Postgres struct {
 			DSN                string `yaml:"dsn"`
 			MaxOpenConns       int    `yaml:"max_open_conns"`
@@ -178,12 +209,28 @@ type yamlConfig struct {
 			ConnMaxLifetimeMin int    `yaml:"conn_max_lifetime_minutes"`
 			ConnMaxIdleTimeMin int    `yaml:"conn_max_idle_time_minutes"`
 		} `yaml:"postgres"`
+		SQLite struct {
+			Path          string `yaml:"path"`
+			DSN           string `yaml:"dsn"`
+			MaxOpenConns  int    `yaml:"max_open_conns"`
+			BusyTimeoutMS int    `yaml:"busy_timeout_ms"`
+			CacheSizeKB   int    `yaml:"cache_size_kb"`
+			MmapSizeBytes int64  `yaml:"mmap_size_bytes"`
+			Synchronous   string `yaml:"synchronous"`
+			TempStore     string `yaml:"temp_store"`
+		} `yaml:"sqlite"`
 		Redis struct {
-			Addr     string `yaml:"addr"`
-			Password string `yaml:"password"`
-			DB       int    `yaml:"db"`
+			Addr                  string `yaml:"addr"`
+			Username              string `yaml:"username"`
+			Password              string `yaml:"password"`
+			DB                    int    `yaml:"db"`
+			TLSEnabled            *bool  `yaml:"tls_enabled"`
+			TLSInsecureSkipVerify *bool  `yaml:"tls_insecure_skip_verify"`
 		} `yaml:"redis"`
 	} `yaml:"database"`
+	Cache struct {
+		Driver string `yaml:"driver"`
+	} `yaml:"cache"`
 	Storage struct {
 		Backend string `yaml:"backend"`
 		Local   struct {
@@ -215,6 +262,7 @@ type yamlConfig struct {
 			Endpoint     string  `yaml:"endpoint"`
 			Headers      string  `yaml:"headers"`
 			Insecure     *bool   `yaml:"insecure"`
+			Protocol     string  `yaml:"protocol"`
 			SamplingRate float64 `yaml:"sampling_rate"`
 		} `yaml:"tracing"`
 	} `yaml:"observability"`
@@ -239,14 +287,27 @@ type Config struct {
 	JWTSecret                    string
 	DataEncryptionKey            string
 	SSRFProtectionEnabled        bool
+	DatabaseDriver               string
 	PostgresDSN                  string
 	PostgresMaxOpenConns         int
 	PostgresMaxIdleConns         int
 	PostgresConnMaxLifetimeMin   int
 	PostgresConnMaxIdleTimeMin   int
+	SQLitePath                   string
+	SQLiteDSN                    string
+	SQLiteMaxOpenConns           int
+	SQLiteBusyTimeoutMS          int
+	SQLiteCacheSizeKB            int
+	SQLiteMmapSizeBytes          int64
+	SQLiteSynchronous            string
+	SQLiteTempStore              string
+	CacheDriver                  string
 	RedisAddr                    string
+	RedisUsername                string
 	RedisPassword                string
 	RedisDB                      int
+	RedisTLSEnabled              bool
+	RedisTLSInsecureSkipVerify   bool
 	StorageBackend               string
 	StorageRootDir               string
 	StorageS3Endpoint            string
@@ -276,6 +337,7 @@ type Config struct {
 	OTelExporterOTLPEndpoint     string
 	OTelExporterOTLPHeaders      string
 	OTelExporterOTLPInsecure     bool
+	OTelExporterOTLPProtocol     string
 	OTelSamplingRate             float64
 
 	// ── 动态配置（由 DB 种子初始化默认值，settings.RuntimeSettings.ApplyTo 覆盖） ──
@@ -292,6 +354,7 @@ type Config struct {
 	ThirdPartyLoginEnabled       bool
 	EmailRegistrationEnabled     bool
 	EmailVerificationEnabled     bool
+	PasswordResetEnabled         bool
 	EmailRegistrationDomains     string
 	EmailRegistrationNoAlias     bool
 	AutoLinkVerifiedEmail        bool
@@ -302,12 +365,15 @@ type Config struct {
 	MaxContextMessages       int
 	ContextMaxTurns          int
 	ContextMaxInputTokens    int
+	ContextCompactEnabled    bool
 	ContextCompactTrigger    int
 	ContextCompactPreserve   int
+	ConversationDefaultModel string
 	ConversationTaskModel    string
 	ConversationTitlePrompt  string
 	ConversationLabelsPrompt string
 	DefaultSystemPrompt      string
+	SkillsPrompt             string
 	ModelOptionPolicyMode    string
 	ModelOptionAllowedPaths  string
 	ModelOptionDeniedPaths   string
@@ -357,6 +423,7 @@ type Config struct {
 	ExtractAliyunOCRTimeoutSeconds    int    // 阿里云 OCR 请求超时(秒)
 	ExtractMinerUSource               string // MinerU 服务类型(cloud/self_hosted)
 	ExtractMinerUBaseURL              string // MinerU 服务地址
+	ExtractMinerUFileTypes            string // MinerU 处理的文件类型（逗号分隔）
 	ExtractMinerUTimeoutSeconds       int    // MinerU 请求超时(秒)
 	ExtractMinerUAuthToken            string // MinerU 鉴权 Token
 	ExtractLLMOCRBaseURL              string // LLM OCR 服务地址
@@ -413,6 +480,7 @@ type Config struct {
 	MCPMaxSelectedToolsPerMessage int
 	MCPMaxLLMCallsPerRun          int
 	MCPMaxToolCallsPerRun         int
+	MCPToolPrompt                 string
 }
 
 // defaultYAMLPaths 固定读取仓库根目录的 config.yaml。
@@ -443,14 +511,27 @@ func Load() Config {
 		JWTSecret:                    envOr("JWT_SECRET", yc.Security.JWTSecret, defaultJWTSecret),
 		DataEncryptionKey:            envOr("DATA_ENCRYPTION_KEY", yc.Security.DataEncryptionKey, defaultDataEncryptionKey),
 		SSRFProtectionEnabled:        envOrBoolPtr("SSRF_PROTECTION_ENABLED", yc.Security.SSRFProtectionEnabled, false),
-		PostgresDSN:                  envOr("POSTGRES_DSN", yc.Database.Postgres.DSN, "host=127.0.0.1 user=deeix_chat password=deeix_chat_dev_2026 dbname=deeix_chat port=5432 sslmode=disable TimeZone=Asia/Shanghai"),
+		DatabaseDriver:               normalizeDatabaseDriver(envOr("DATABASE_DRIVER", yc.Database.Driver, "postgres")),
+		PostgresDSN:                  normalizePostgresDSN(envOr("POSTGRES_DSN", yc.Database.Postgres.DSN, "host=127.0.0.1 user=deeix_chat password=deeix_chat_dev_2026 dbname=deeix_chat port=5432 sslmode=disable TimeZone=Asia/Shanghai")),
 		PostgresMaxOpenConns:         envOrInt("POSTGRES_MAX_OPEN_CONNS", yc.Database.Postgres.MaxOpenConns, 30),
 		PostgresMaxIdleConns:         envOrInt("POSTGRES_MAX_IDLE_CONNS", yc.Database.Postgres.MaxIdleConns, 10),
 		PostgresConnMaxLifetimeMin:   envOrInt("POSTGRES_CONN_MAX_LIFETIME_MINUTES", yc.Database.Postgres.ConnMaxLifetimeMin, 60),
 		PostgresConnMaxIdleTimeMin:   envOrInt("POSTGRES_CONN_MAX_IDLE_TIME_MINUTES", yc.Database.Postgres.ConnMaxIdleTimeMin, 10),
+		SQLitePath:                   envOrPath("SQLITE_PATH", yc.Database.SQLite.Path, "./data/deeix.db", yc.sourceDir),
+		SQLiteDSN:                    envOr("SQLITE_DSN", yc.Database.SQLite.DSN, ""),
+		SQLiteMaxOpenConns:           envOrInt("SQLITE_MAX_OPEN_CONNS", yc.Database.SQLite.MaxOpenConns, 1),
+		SQLiteBusyTimeoutMS:          envOrInt("SQLITE_BUSY_TIMEOUT_MS", yc.Database.SQLite.BusyTimeoutMS, 5000),
+		SQLiteCacheSizeKB:            envOrInt("SQLITE_CACHE_SIZE_KB", yc.Database.SQLite.CacheSizeKB, 20480),
+		SQLiteMmapSizeBytes:          envOrInt64("SQLITE_MMAP_SIZE_BYTES", yc.Database.SQLite.MmapSizeBytes, 268435456),
+		SQLiteSynchronous:            normalizeSQLiteSynchronous(envOr("SQLITE_SYNCHRONOUS", yc.Database.SQLite.Synchronous, "NORMAL")),
+		SQLiteTempStore:              normalizeSQLiteTempStore(envOr("SQLITE_TEMP_STORE", yc.Database.SQLite.TempStore, "MEMORY")),
+		CacheDriver:                  normalizeCacheDriver(envOr("CACHE_DRIVER", yc.Cache.Driver, "redis")),
 		RedisAddr:                    envOr("REDIS_ADDR", yc.Database.Redis.Addr, "127.0.0.1:6379"),
+		RedisUsername:                envOr("REDIS_USERNAME", yc.Database.Redis.Username, ""),
 		RedisPassword:                envOr("REDIS_PASSWORD", yc.Database.Redis.Password, ""),
 		RedisDB:                      envOrInt("REDIS_DB", yc.Database.Redis.DB, 0),
+		RedisTLSEnabled:              envOrBoolPtr("REDIS_TLS_ENABLED", yc.Database.Redis.TLSEnabled, false),
+		RedisTLSInsecureSkipVerify:   envOrBoolPtr("REDIS_TLS_INSECURE_SKIP_VERIFY", yc.Database.Redis.TLSInsecureSkipVerify, false),
 		StorageBackend:               envOr("STORAGE_BACKEND", yc.Storage.Backend, "local"),
 		StorageRootDir:               envOrPath("STORAGE_ROOT_DIR", yc.Storage.Local.RootDir, "./storage", yc.sourceDir),
 		StorageS3Endpoint:            envOr("STORAGE_S3_ENDPOINT", yc.Storage.S3.Endpoint, ""),
@@ -480,6 +561,7 @@ func Load() Config {
 		OTelExporterOTLPEndpoint:     envOr("OTEL_EXPORTER_OTLP_ENDPOINT", yc.Observability.Tracing.Endpoint, ""),
 		OTelExporterOTLPHeaders:      envOr("OTEL_EXPORTER_OTLP_HEADERS", yc.Observability.Tracing.Headers, ""),
 		OTelExporterOTLPInsecure:     envOrBoolPtr("OTEL_EXPORTER_OTLP_INSECURE", yc.Observability.Tracing.Insecure, false),
+		OTelExporterOTLPProtocol:     normalizeOTelExporterOTLPProtocol(envOr("OTEL_EXPORTER_OTLP_PROTOCOL", yc.Observability.Tracing.Protocol, "grpc")),
 		OTelSamplingRate:             envOrFloat("OTEL_TRACES_SAMPLER_ARG", envOrFloat("OTEL_SAMPLING_RATE", yc.Observability.Tracing.SamplingRate, 1), 1),
 
 		// 动态配置默认值（会被 DB 覆盖）
@@ -495,6 +577,7 @@ func Load() Config {
 		ThirdPartyLoginEnabled:            true,
 		EmailRegistrationEnabled:          true,
 		EmailVerificationEnabled:          false,
+		PasswordResetEnabled:              false,
 		EmailRegistrationDomains:          "",
 		EmailRegistrationNoAlias:          false,
 		AutoLinkVerifiedEmail:             true,
@@ -504,12 +587,15 @@ func Load() Config {
 		MaxContextMessages:                20,
 		ContextMaxTurns:                   48,
 		ContextMaxInputTokens:             32000,
-		ContextCompactTrigger:             32768,
+		ContextCompactEnabled:             false,
+		ContextCompactTrigger:             65536,
 		ContextCompactPreserve:            8,
+		ConversationDefaultModel:          "",
 		ConversationTaskModel:             "follow",
 		ConversationTitlePrompt:           "",
 		ConversationLabelsPrompt:          "",
 		DefaultSystemPrompt:               "",
+		SkillsPrompt:                      "",
 		ModelOptionPolicyMode:             "allowlist",
 		ModelOptionAllowedPaths:           DefaultModelOptionAllowedPathsJSON(),
 		ModelOptionDeniedPaths:            DefaultModelOptionDeniedPathsJSON(),
@@ -518,12 +604,12 @@ func Load() Config {
 		MaxMessageFiles:                   10,
 		ImageMaxDimension:                 1024,
 		FileFullContextLimitEnabled:       true,
-		FileFullContextMaxBytes:           51200, // 50KB
-		FileFullContextMaxTokens:          12000,
+		FileFullContextMaxBytes:           65536, // 64KB
+		FileFullContextMaxTokens:          65536,
 		FileImageMaxBytes:                 0,
 		FileDocMaxBytes:                   0,
 		FileFullContextPDFMaxPages:        20,
-		FileAllowedMIMETypes:              "image/jpeg,image/png,image/webp,image/gif,text/plain,text/markdown,text/csv,text/yaml,application/json,application/yaml,application/x-yaml,application/toml,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel",
+		FileAllowedMIMETypes:              "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,text/plain,text/markdown,text/csv,text/yaml,application/json,application/yaml,application/x-yaml,application/toml,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel",
 		ExtractEngine:                     "builtin",
 		ExtractOCREngine:                  "rapidocr",
 		ExtractImageOCREnabled:            false,
@@ -557,6 +643,7 @@ func Load() Config {
 		ExtractAliyunOCRTimeoutSeconds:    60,
 		ExtractMinerUSource:               "cloud",
 		ExtractMinerUBaseURL:              "https://mineru.net/api/v4",
+		ExtractMinerUFileTypes:            "pdf,word,presentation",
 		ExtractMinerUTimeoutSeconds:       180,
 		ExtractMinerUAuthToken:            "",
 		ExtractLLMOCRBaseURL:              "",
@@ -604,11 +691,18 @@ func Load() Config {
 		MCPMaxSelectedToolsPerMessage:     DefaultMCPMaxSelectedToolsPerMessage,
 		MCPMaxLLMCallsPerRun:              5,
 		MCPMaxToolCallsPerRun:             8,
+		MCPToolPrompt:                     "",
 	}
 }
 
 // Validate 检查关键配置是否合法。
 func (c Config) Validate() error {
+	if err := c.validateDatabase(); err != nil {
+		return err
+	}
+	if err := c.validateCache(); err != nil {
+		return err
+	}
 	if err := c.validateStorage(); err != nil {
 		return err
 	}
@@ -647,6 +741,37 @@ func (c Config) Validate() error {
 	}
 
 	return nil
+}
+
+func (c Config) validateDatabase() error {
+	switch normalizeDatabaseDriver(c.DatabaseDriver) {
+	case "postgres":
+		return nil
+	case "sqlite":
+		if strings.TrimSpace(c.SQLiteDSN) == "" && strings.TrimSpace(c.SQLitePath) == "" {
+			return errors.New("invalid database config: SQLITE_PATH or SQLITE_DSN must be set when DATABASE_DRIVER=sqlite")
+		}
+		if normalizeSQLiteSynchronous(c.SQLiteSynchronous) == "" {
+			return fmt.Errorf("invalid database config: unsupported SQLITE_SYNCHRONOUS %q", c.SQLiteSynchronous)
+		}
+		if normalizeSQLiteTempStore(c.SQLiteTempStore) == "" {
+			return fmt.Errorf("invalid database config: unsupported SQLITE_TEMP_STORE %q", c.SQLiteTempStore)
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid database config: unsupported DATABASE_DRIVER %q", c.DatabaseDriver)
+	}
+}
+
+func (c Config) validateCache() error {
+	switch normalizeCacheDriver(c.CacheDriver) {
+	case "redis":
+		return nil
+	case "memory":
+		return nil
+	default:
+		return fmt.Errorf("invalid cache config: unsupported CACHE_DRIVER %q", c.CacheDriver)
+	}
 }
 
 func (c Config) validateStorage() error {
@@ -736,6 +861,114 @@ func normalizeEnv(value string) string {
 		return "prod"
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func normalizeDatabaseDriver(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "postgres", "postgresql", "pg":
+		return "postgres"
+	case "sqlite", "sqlite3":
+		return "sqlite"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func normalizePostgresDSN(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return trimmed
+	}
+	if strings.Contains(trimmed, "://") {
+		parsed, err := url.Parse(trimmed)
+		if err != nil || parsed == nil || parsed.RawQuery == "" {
+			return trimmed
+		}
+		parts := strings.Split(parsed.RawQuery, "&")
+		changed := false
+		for index, part := range parts {
+			key, rawValue, ok := strings.Cut(part, "=")
+			if !ok {
+				continue
+			}
+			decodedKey, keyErr := url.QueryUnescape(key)
+			if keyErr != nil || !strings.EqualFold(decodedKey, "timezone") || !strings.Contains(rawValue, "%") {
+				continue
+			}
+			decodedValue, valueErr := url.QueryUnescape(rawValue)
+			if valueErr != nil || strings.TrimSpace(decodedValue) == "" || decodedValue == rawValue {
+				continue
+			}
+			parts[index] = key + "=" + decodedValue
+			changed = true
+		}
+		if !changed {
+			return trimmed
+		}
+		parsed.RawQuery = strings.Join(parts, "&")
+		return parsed.String()
+	}
+
+	parts := strings.Fields(trimmed)
+	changed := false
+	for index, part := range parts {
+		key, rawValue, ok := strings.Cut(part, "=")
+		if !ok || !strings.EqualFold(key, "timezone") || !strings.Contains(rawValue, "%") {
+			continue
+		}
+		decodedValue, err := url.QueryUnescape(rawValue)
+		if err != nil || strings.TrimSpace(decodedValue) == "" || decodedValue == rawValue {
+			continue
+		}
+		parts[index] = key + "=" + decodedValue
+		changed = true
+	}
+	if !changed {
+		return trimmed
+	}
+	return strings.Join(parts, " ")
+}
+
+func normalizeCacheDriver(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "redis":
+		return "redis"
+	case "memory", "mem", "inmemory", "in-memory":
+		return "memory"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func normalizeOTelExporterOTLPProtocol(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "http", "http/protobuf":
+		return "http"
+	default:
+		return "grpc"
+	}
+}
+
+func normalizeSQLiteSynchronous(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "", "NORMAL":
+		return "NORMAL"
+	case "OFF", "FULL", "EXTRA":
+		return strings.ToUpper(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeSQLiteTempStore(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "", "MEMORY":
+		return "MEMORY"
+	case "DEFAULT", "FILE":
+		return strings.ToUpper(strings.TrimSpace(value))
+	default:
+		return ""
 	}
 }
 

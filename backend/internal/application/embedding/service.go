@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -17,6 +18,8 @@ import (
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"go.uber.org/zap"
 )
+
+var ErrEmbeddingServiceNotConfigured = errors.New("embedding service not configured")
 
 // Service 封装文件 embedding 执行与状态管理能力。
 type Service struct {
@@ -46,52 +49,65 @@ func NewServiceWithRuntime(cfg *config.Runtime, repo repository.EmbeddingReposit
 	}
 }
 
-// Available 返回当前 embedding 能力是否可用及原因。
+// Available 返回当前对话 RAG 检索能力是否可用及原因。
 func (s *Service) Available(ctx context.Context) (bool, string) {
 	cfg := s.snapshot()
 	if !cfg.RAGEnabled {
 		return false, "rag_disabled"
 	}
+	available, reason, _ := s.indexingAvailable(ctx, cfg)
+	return available, reason
+}
+
+// IndexingAvailable 返回文件向量索引维护能力是否可用及原因。
+func (s *Service) IndexingAvailable(ctx context.Context) (bool, string) {
+	available, reason, _ := s.indexingAvailable(ctx, s.snapshot())
+	return available, reason
+}
+
+func (s *Service) indexingAvailable(ctx context.Context, cfg config.Config) (bool, string, error) {
 	if !cfg.EmbeddingEnabled {
-		return false, "embedding_disabled"
+		return false, "embedding_disabled", nil
 	}
 	if strings.TrimSpace(cfg.RAGModel) == "" {
-		return false, "embedding_model_missing"
+		return false, "embedding_model_missing", nil
 	}
 	if strings.TrimSpace(cfg.EmbeddingHost) == "" {
-		return false, "embedding_host_missing"
+		return false, "embedding_host_missing", nil
+	}
+	if s.embedClient == nil {
+		return false, "embedding_client_missing", nil
 	}
 	if s.repo == nil {
-		return false, "vector_store_unavailable"
+		return false, "vector_store_unavailable", nil
 	}
 	available, err := s.repo.VectorStoreAvailable(ctx)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Warn("embedding vector store availability check failed", zap.Error(err))
 		}
-		return false, "vector_store_error"
+		return false, "vector_store_error", err
 	}
 	if !available {
-		return false, "vector_store_unavailable"
+		return false, "vector_store_unavailable", nil
 	}
-	return true, "available"
+	return true, "available", nil
 }
 
 // ShouldTrigger 判断当前文件是否应触发 embedding。
 func (s *Service) ShouldTrigger(fileObj domainconversation.FileObject) bool {
 	cfg := s.snapshot()
-	if !cfg.RAGEnabled || !cfg.EmbeddingEnabled || !cfg.EmbedTriggerOnUpload || strings.TrimSpace(cfg.RAGModel) == "" {
+	if !cfg.EmbeddingEnabled || !cfg.EmbedTriggerOnUpload || strings.TrimSpace(cfg.RAGModel) == "" || strings.TrimSpace(cfg.EmbeddingHost) == "" {
 		return false
 	}
+	return canEmbedFile(cfg, fileObj)
+}
+
+func canEmbedFile(cfg config.Config, fileObj domainconversation.FileObject) bool {
 	if strings.TrimSpace(fileObj.StoragePath) == "" || strings.ToLower(strings.TrimSpace(fileObj.Status)) != "active" {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(fileObj.FileCategory), "image") {
-		return cfg.ExtractImageOCREnabled
-	}
-	mime := strings.ToLower(strings.TrimSpace(fileObj.MimeType))
-	name := strings.TrimSpace(fileObj.FileName)
-	return isTextMIMEForEmbed(mime, name) || isPDFMIME(mime, name) || isDocxMIME(mime, name) || isExcelMIME(mime, name)
+	return supportsEmbeddingSource(fileObj, cfg)
 }
 
 // MaybeTrigger 在满足条件时异步触发 embedding。
@@ -99,7 +115,7 @@ func (s *Service) MaybeTrigger(fileObj domainconversation.FileObject) {
 	if !s.ShouldTrigger(fileObj) {
 		return
 	}
-	if available, _ := s.Available(context.Background()); !available {
+	if available, _, _ := s.indexingAvailable(context.Background(), s.snapshot()); !available {
 		return
 	}
 	s.Trigger(fileObj)
@@ -122,10 +138,13 @@ func (s *Service) Trigger(fileObj domainconversation.FileObject) {
 // ProcessFile 执行 embedding 完整流程。
 func (s *Service) ProcessFile(ctx context.Context, fileObj domainconversation.FileObject) error {
 	cfg := s.snapshot()
-	if !cfg.RAGEnabled || !cfg.EmbeddingEnabled || strings.TrimSpace(cfg.RAGModel) == "" {
+	if !cfg.EmbeddingEnabled || strings.TrimSpace(cfg.RAGModel) == "" || strings.TrimSpace(cfg.EmbeddingHost) == "" {
 		return nil
 	}
 	if s.repo == nil {
+		return nil
+	}
+	if !supportsEmbeddingSource(fileObj, cfg) {
 		return nil
 	}
 
@@ -355,22 +374,26 @@ func (s *Service) MarkAllFilesStale(ctx context.Context) (int64, error) {
 	return s.repo.MarkAllEmbeddedFilesStale(ctx)
 }
 
-// ReindexStaleFiles 异步触发所有 stale/failed 文件的重新向量化，返回提交任务数。
+// ReindexStaleFiles 异步触发所有可向量化的 none/stale/failed 文件，返回提交任务数。
 // 实际 embedding 在 goroutine 中执行，调用方立即返回。
 func (s *Service) ReindexStaleFiles(ctx context.Context) (int, error) {
 	if s.repo == nil {
 		return 0, nil
 	}
 	cfg := s.snapshot()
-	if !cfg.RAGEnabled || !cfg.EmbeddingEnabled || strings.TrimSpace(cfg.RAGModel) == "" || strings.TrimSpace(cfg.EmbeddingHost) == "" {
-		return 0, fmt.Errorf("embedding service not configured")
+	available, _, err := s.indexingAvailable(ctx, cfg)
+	if err != nil {
+		return 0, err
+	}
+	if !available {
+		return 0, ErrEmbeddingServiceNotConfigured
 	}
 
 	const pageSize = 100
 	submitted := 0
-	offset := 0
+	var afterID uint
 	for {
-		files, err := s.repo.ListFilesForReindex(ctx, pageSize, offset)
+		files, err := s.repo.ListFilesForReindex(ctx, pageSize, afterID)
 		if err != nil {
 			return submitted, err
 		}
@@ -378,15 +401,30 @@ func (s *Service) ReindexStaleFiles(ctx context.Context) (int, error) {
 			break
 		}
 		for _, f := range files {
+			if !canEmbedFile(cfg, f) {
+				continue
+			}
 			s.Trigger(f)
 			submitted++
 		}
 		if len(files) < pageSize {
 			break
 		}
-		offset += pageSize
+		afterID = files[len(files)-1].ID
 	}
 	return submitted, nil
+}
+
+func supportsEmbeddingSource(fileObj domainconversation.FileObject, cfg config.Config) bool {
+	switch strings.ToLower(strings.TrimSpace(fileObj.FileCategory)) {
+	case "video":
+		return false
+	case "image":
+		return cfg.ExtractImageOCREnabled
+	}
+	mime := strings.ToLower(strings.TrimSpace(fileObj.MimeType))
+	name := strings.TrimSpace(fileObj.FileName)
+	return isTextMIMEForEmbed(mime, name) || isPDFMIME(mime, name) || isWordMIME(mime, name) || isPresentationMIME(mime, name) || isExcelMIME(mime, name)
 }
 
 // postProcessEmbeddings 对批量向量做两步后处理：
@@ -507,7 +545,7 @@ func isTextMIMEForEmbed(mimeType, fileName string) bool {
 	return false
 }
 
-func isDocxMIME(mimeType, fileName string) bool {
+func isWordMIME(mimeType, fileName string) bool {
 	m := strings.ToLower(strings.TrimSpace(mimeType))
 	ext := ""
 	if idx := strings.LastIndex(fileName, "."); idx >= 0 {
@@ -515,6 +553,16 @@ func isDocxMIME(mimeType, fileName string) bool {
 	}
 	return strings.Contains(m, "wordprocessingml") || strings.Contains(m, "msword") ||
 		ext == "docx" || ext == "doc"
+}
+
+func isPresentationMIME(mimeType, fileName string) bool {
+	m := strings.ToLower(strings.TrimSpace(mimeType))
+	ext := ""
+	if idx := strings.LastIndex(fileName, "."); idx >= 0 {
+		ext = strings.ToLower(fileName[idx+1:])
+	}
+	return strings.Contains(m, "presentationml") || strings.Contains(m, "ms-powerpoint") ||
+		ext == "pptx" || ext == "ppt"
 }
 
 func isExcelMIME(mimeType, fileName string) bool {

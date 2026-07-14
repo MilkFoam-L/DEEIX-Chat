@@ -9,6 +9,7 @@ import type {
   ChatModelOption,
   PendingAttachment,
   PendingExchange,
+  PendingExchangeMap,
 } from "@/features/chat/types/chat-runtime";
 import type { ChatSubmitBlockReason } from "@/features/chat/model/chat-task";
 import { resolveChatSubmitDecision } from "@/features/chat/model/chat-task";
@@ -18,28 +19,29 @@ import {
   toPendingAttachments,
   toPendingProcessTrace,
 } from "@/features/chat/model/message-submit";
+import { readLiveUpstreamThinkTrace } from "@/features/chat/model/upstream-think-store";
 import {
   resolveErrorDetails,
   resolveErrorMessage,
   resolveErrorSummary,
-  toConversationPatch,
 } from "@/features/chat/utils/chat-runtime";
 import {
-  applyBranchSelectionPath,
   buildChildrenIndex,
-  resolveBranchSelectionPath,
+  parseAttachments,
   toBranchKey,
 } from "@/features/chat/model/chat-thread";
 import { sanitizeConversationOptions } from "@/features/chat/model/conversation-options";
 import { buildMediaImagePreviewMarkdown } from "@/features/chat/model/media-image-preview";
 import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
 import { notifyResponseCompletion } from "@/shared/lib/browser-notifications";
+import { brandText } from "@/shared/lib/branding";
 import {
   cancelMessageGeneration,
   getConversation,
   streamImageEdit,
   streamImageGeneration,
   streamMessage as streamConversationMessage,
+  streamVideoGeneration,
   updateMessage,
   type ConversationStreamOptions,
 } from "@/shared/api/conversation";
@@ -47,14 +49,20 @@ import type {
   ConversationDTO,
   ConversationOptions,
   MediaImageRequest,
+  MediaVideoRequest,
   MessageDTO,
   SendMessageRequest,
   SendMessageResult,
   StreamMessageEvent,
 } from "@/shared/api/conversation.types";
 import { ApiError } from "@/shared/api/http-client";
+import type { SkillSummaryDTO } from "@/shared/api/skills.types";
 
-const CONVERSATION_METADATA_REFRESH_DELAYS = [800, 1200, 1800, 2600, 3500, 5000] as const;
+const CONVERSATION_METADATA_REFRESH_MAX_WAIT_MS = 45_000;
+const CONVERSATION_METADATA_REFRESH_INITIAL_DELAY_MS = 800;
+const CONVERSATION_METADATA_REFRESH_MAX_DELAY_MS = 5_000;
+const CONVERSATION_METADATA_REFRESH_BACKOFF = 1.5;
+const MAX_CONCURRENT_RUNS = 5;
 
 function resolveSubmitBlockDescription(
   reason: ChatSubmitBlockReason,
@@ -102,14 +110,24 @@ function resolveInputSideUsageValue(...values: Array<number | null | undefined>)
 function resolveMediaStatusLabel(
   status: string,
   fallbackMessage: string,
+  contentType: string | undefined,
   t: ReturnType<typeof useTranslations>,
 ): string {
   switch (status.trim()) {
     case "queued":
+      if (contentType === "video") {
+        return t("mediaStatus.videoQueued");
+      }
       return t("mediaStatus.queued");
     case "running":
+      if (contentType === "video") {
+        return t("mediaStatus.videoRunning");
+      }
       return t("mediaStatus.running");
     case "saving_artifact":
+      if (contentType === "video") {
+        return t("mediaStatus.videoSavingArtifact");
+      }
       return t("mediaStatus.savingArtifact");
     default:
       return fallbackMessage.trim() || status.trim();
@@ -120,6 +138,51 @@ type ActiveStream = {
   controller: AbortController;
   runID: string;
   accessToken: string | null;
+};
+
+function replaceCompletedBranchSelection(
+  previous: Record<string, string>,
+  branch: Pick<
+    PendingExchange,
+    "parentPublicID" | "tempUserPublicID" | "tempAssistantPublicID" | "reuseUserMessage"
+  >,
+  userPublicID: string,
+  assistantPublicID: string,
+): Record<string, string> {
+  const next = { ...previous };
+  let changed = false;
+  const parentKey = toBranchKey(branch.parentPublicID);
+  const tempUserPublicID = branch.tempUserPublicID;
+  const tempAssistantPublicID = branch.tempAssistantPublicID;
+
+  if (!branch.reuseUserMessage && next[parentKey] === tempUserPublicID) {
+    next[parentKey] = userPublicID;
+    changed = true;
+  }
+  if (next[tempUserPublicID] === tempAssistantPublicID) {
+    delete next[tempUserPublicID];
+    if (!branch.reuseUserMessage && next[parentKey] === userPublicID) {
+      next[userPublicID] = assistantPublicID;
+    }
+    changed = true;
+  }
+  if (branch.reuseUserMessage && next[toBranchKey(userPublicID)] === tempAssistantPublicID) {
+    next[toBranchKey(userPublicID)] = assistantPublicID;
+    changed = true;
+  }
+  return changed ? next : previous;
+}
+
+type QueuedChatSubmission = {
+  id: string;
+  content: string;
+  attachments: PendingAttachment[];
+  platformModelName: string;
+  options: ConversationOptions;
+  selectedToolIDs: number[];
+  selectedSkills: SkillSummaryDTO[];
+  htmlVisualPromptEnabled: boolean;
+  htmlVisualColorMode: "light" | "dark";
 };
 
 function sleep(ms: number): Promise<void> {
@@ -147,11 +210,29 @@ function normalizeLabelsJSON(value: string | null | undefined): string {
 
 function isPlaceholderConversationTitle(title: string): boolean {
   const value = title.trim().toLowerCase();
-  return ["", "new conversation", "new chat", "untitled", "新会话", "新对话", "新的对话"].includes(value);
+  return ["new chat", "新对话"].includes(value);
 }
 
-function shouldRefreshGeneratedConversationMetadata(item: ConversationDTO | null, visibleMessageCount: number): boolean {
-  return visibleMessageCount === 0 || item?.messageCount === 0;
+function isFallbackConversationTitle(title: string, fallbackTitle: string): boolean {
+  const normalizedFallback = fallbackTitle.trim();
+  return normalizedFallback !== "" && title.trim() === normalizedFallback;
+}
+
+function conversationTitleFromFirstUserMessage(content: string): string {
+  const value = content.trim().replace(/\s+/g, " ").replace(/^[\s"'`“”‘’]+|[\s"'`“”‘’]+$/g, "");
+  if (!value) {
+    return "";
+  }
+  return Array.from(value).slice(0, 16).join("").trim();
+}
+
+function hasPendingGeneratedConversationMetadata(item: ConversationDTO | null, fallbackTitle = ""): boolean {
+  return (
+    !item ||
+    isPlaceholderConversationTitle(item.title) ||
+    isFallbackConversationTitle(item.title, fallbackTitle) ||
+    normalizeLabelsJSON(item.labelsJSON) === "[]"
+  );
 }
 
 function hasGeneratedConversationMetadataChanged(
@@ -166,24 +247,55 @@ function hasGeneratedConversationMetadataChanged(
   return normalizeLabelsJSON(next.labelsJSON) !== normalizeLabelsJSON(previous?.labelsJSON);
 }
 
+function shouldPollGeneratedConversationMetadata(
+  item: ConversationDTO | null,
+  result: SendMessageResult | null | undefined,
+  fallbackTitle = "",
+): boolean {
+  if (!hasPendingGeneratedConversationMetadata(item, fallbackTitle)) {
+    return false;
+  }
+  const hint = result?.metadataRefreshHint?.trim();
+  if (!hint) {
+    return true;
+  }
+  return hint === "pending";
+}
+
 async function refreshGeneratedConversationMetadata(
   accessToken: string,
   conversationPublicID: string,
   previous: ConversationDTO | null,
+  fallbackTitle: string,
   touchByPublicID: (publicID: string, patch?: Partial<ConversationDTO>) => void,
 ): Promise<void> {
-  for (const delay of CONVERSATION_METADATA_REFRESH_DELAYS) {
-    await sleep(delay);
+  let elapsedMS = 0;
+  let delayMS = CONVERSATION_METADATA_REFRESH_INITIAL_DELAY_MS;
+  let current = previous;
+
+  while (elapsedMS < CONVERSATION_METADATA_REFRESH_MAX_WAIT_MS) {
+    const nextDelayMS = Math.min(delayMS, CONVERSATION_METADATA_REFRESH_MAX_WAIT_MS - elapsedMS);
+    await sleep(nextDelayMS);
+    elapsedMS += nextDelayMS;
+
     let latest: ConversationDTO;
     try {
       latest = await getConversation(accessToken, conversationPublicID);
     } catch {
       continue;
     }
-    if (hasGeneratedConversationMetadataChanged(previous, latest)) {
+    if (hasGeneratedConversationMetadataChanged(current, latest)) {
       touchByPublicID(conversationPublicID, latest);
-      return;
+      current = latest;
+      if (!hasPendingGeneratedConversationMetadata(latest, fallbackTitle)) {
+        return;
+      }
     }
+
+    delayMS = Math.min(
+      Math.round(delayMS * CONVERSATION_METADATA_REFRESH_BACKOFF),
+      CONVERSATION_METADATA_REFRESH_MAX_DELAY_MS,
+    );
   }
 }
 
@@ -194,6 +306,7 @@ export function useChatMessageSubmit({
   selectedPlatformModelName,
   modelOptions,
   selectedToolIDs,
+  selectedSkills,
   htmlVisualPromptEnabled,
   htmlVisualColorMode,
   options,
@@ -210,8 +323,8 @@ export function useChatMessageSubmit({
   setDraft,
   setAttachments,
   releaseAttachments,
-  pendingExchange,
-  setPendingExchange,
+  pendingExchanges,
+  setPendingExchanges,
   setBranchSelections,
   showConversationLayout,
   setShowConversationLayout,
@@ -220,12 +333,15 @@ export function useChatMessageSubmit({
   visibleMessages,
   combinedMessages,
   serverMessagePublicIDs,
+  enqueueUpstreamThinkDelta,
   enqueueStreamText,
   flushStreamTextNow,
+  flushUpstreamThinkNow,
   resetStreamBuffer,
   startStream,
   activeGenerationRunsRef,
   failedGenerationRunsRef,
+  resumeGenerationActive = false,
 }: {
   conversationID: string | null;
   resetToken: number;
@@ -233,6 +349,7 @@ export function useChatMessageSubmit({
   selectedPlatformModelName: string;
   modelOptions: ChatModelOption[];
   selectedToolIDs: number[];
+  selectedSkills: SkillSummaryDTO[];
   htmlVisualPromptEnabled: boolean;
   htmlVisualColorMode: "light" | "dark";
   options: ConversationOptions;
@@ -249,8 +366,8 @@ export function useChatMessageSubmit({
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   setAttachments: React.Dispatch<React.SetStateAction<PendingAttachment[]>>;
   releaseAttachments: (items: PendingAttachment[]) => void;
-  pendingExchange: PendingExchange | null;
-  setPendingExchange: React.Dispatch<React.SetStateAction<PendingExchange | null>>;
+  pendingExchanges: PendingExchangeMap;
+  setPendingExchanges: React.Dispatch<React.SetStateAction<PendingExchangeMap>>;
   setBranchSelections: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   showConversationLayout: boolean;
   setShowConversationLayout: React.Dispatch<React.SetStateAction<boolean>>;
@@ -259,18 +376,59 @@ export function useChatMessageSubmit({
   visibleMessages: ChatAreaMessage[];
   combinedMessages: ChatAreaMessage[];
   serverMessagePublicIDs: Set<string>;
-  enqueueStreamText: (delta: string) => void;
-  flushStreamTextNow: () => void;
-  resetStreamBuffer: () => void;
-  startStream: (exchangeKey: string) => void;
+  enqueueUpstreamThinkDelta: (exchangeKey: string, event: Extract<StreamMessageEvent, { type: "upstream_think_delta" }>) => void;
+  enqueueStreamText: (exchangeKey: string, delta: string) => void;
+  flushStreamTextNow: (exchangeKey: string) => void;
+  flushUpstreamThinkNow: (exchangeKey: string) => void;
+  resetStreamBuffer: (exchangeKey?: string) => void;
+  startStream: (exchangeKey: string, runID?: string) => void;
   activeGenerationRunsRef?: React.RefObject<Set<string>>;
   failedGenerationRunsRef?: React.RefObject<Set<string>>;
+  resumeGenerationActive?: boolean;
 }) {
   const t = useTranslations("chat.submit");
-  const [sending, setSending] = React.useState(false);
-  const activeStreamRef = React.useRef<ActiveStream | null>(null);
+  const [activeRunCount, setActiveRunCount] = React.useState(0);
+  const activeStreamsRef = React.useRef(new Map<string, ActiveStream>());
   const activeGenerationRunsRefRef = React.useRef(activeGenerationRunsRef);
   const previousResetTokenRef = React.useRef(resetToken);
+  const conversationIDRef = React.useRef(conversationID);
+  const activeConversationRef = React.useRef(activeConversation);
+  const nextModelRunSequenceRef = React.useRef(0);
+  const latestCompletedModelRunSequenceRef = React.useRef(0);
+  const sendQueuedAfterCurrentRef = React.useRef(false);
+  const [queuedSubmissions, setQueuedSubmissions] = React.useState<QueuedChatSubmission[]>([]);
+  const queuedSubmissionsRef = React.useRef<QueuedChatSubmission[]>([]);
+  const sending = activeRunCount > 0;
+
+  const syncActiveRunCount = React.useCallback(() => {
+    setActiveRunCount(activeStreamsRef.current.size);
+  }, []);
+
+  const updatePendingExchange = React.useCallback(
+    (exchangeKey: string, update: (current: PendingExchange) => PendingExchange) => {
+      setPendingExchanges((current) => {
+        const exchange = current[exchangeKey];
+        if (!exchange) {
+          return current;
+        }
+        const nextExchange = update(exchange);
+        return nextExchange === exchange ? current : { ...current, [exchangeKey]: nextExchange };
+      });
+    },
+    [setPendingExchanges],
+  );
+
+  React.useEffect(() => {
+    conversationIDRef.current = conversationID;
+  }, [conversationID]);
+
+  React.useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
+
+  React.useEffect(() => {
+    queuedSubmissionsRef.current = queuedSubmissions;
+  }, [queuedSubmissions]);
 
   React.useEffect(() => {
     activeGenerationRunsRefRef.current = activeGenerationRunsRef;
@@ -282,70 +440,88 @@ export function useChatMessageSubmit({
     }
     previousResetTokenRef.current = resetToken;
 
-    const active = activeStreamRef.current;
-    if (active) {
-      if (active.accessToken) {
-        void cancelMessageGeneration(active.accessToken, active.runID).catch(() => undefined);
-      }
+    for (const active of activeStreamsRef.current.values()) {
+      // 会话切换只解除当前页面订阅，不取消服务端仍在执行的 run。
       active.controller.abort();
       activeGenerationRunsRefRef.current?.current.delete(active.runID);
-      activeStreamRef.current = null;
     }
+    activeStreamsRef.current.clear();
 
     resetStreamBuffer();
-    setPendingExchange(null);
-    setSending(false);
-  }, [resetStreamBuffer, resetToken, setPendingExchange]);
+    setPendingExchanges({});
+    setActiveRunCount(0);
+    nextModelRunSequenceRef.current = 0;
+    latestCompletedModelRunSequenceRef.current = 0;
+    sendQueuedAfterCurrentRef.current = false;
+    releaseAttachments(queuedSubmissionsRef.current.flatMap((item) => item.attachments));
+    setQueuedSubmissions([]);
+  }, [releaseAttachments, resetStreamBuffer, resetToken, setPendingExchanges]);
 
   React.useEffect(() => {
-    if (!pendingExchange) {
-      return;
-    }
-    const userPublicID = pendingExchange.userPublicID || pendingExchange.tempUserPublicID;
-    const assistantPublicID = pendingExchange.assistantPublicID || pendingExchange.tempAssistantPublicID;
-    if (serverMessagePublicIDs.has(userPublicID) && serverMessagePublicIDs.has(assistantPublicID)) {
-      const serverPath = resolveBranchSelectionPath(combinedMessages, assistantPublicID);
-      if (serverPath.length > 0) {
-        setBranchSelections((prev) =>
-          applyBranchSelectionPath(
-            prev,
-            serverPath,
-            [pendingExchange.tempUserPublicID, pendingExchange.tempAssistantPublicID],
-          ),
-        );
+    const completedKeys: string[] = [];
+    const completedBranches: Array<{
+      exchange: PendingExchange;
+      userPublicID: string;
+      assistantPublicID: string;
+    }> = [];
+    for (const [exchangeKey, exchange] of Object.entries(pendingExchanges)) {
+      const userPublicID = exchange.userPublicID || exchange.tempUserPublicID;
+      const assistantPublicID = exchange.assistantPublicID || exchange.tempAssistantPublicID;
+      if (serverMessagePublicIDs.has(userPublicID) && serverMessagePublicIDs.has(assistantPublicID)) {
+        completedKeys.push(exchangeKey);
+        continue;
       }
-      setPendingExchange(null);
-      return;
-    }
-
-    const pendingRunID = pendingExchange.runID?.trim();
-    if (!pendingRunID || pendingExchange.assistantPending) {
-      return;
-    }
-    const serverAssistant = combinedMessages.find(
-      (item) =>
-        item.role === "assistant" &&
-        item.runID === pendingRunID &&
-        serverMessagePublicIDs.has(item.publicID) &&
-        resolvePersistedPublicID(item.publicID) &&
-        !item.isPending &&
-        !item.isStreaming &&
-        item.status !== "pending",
-    );
-    if (serverAssistant) {
-      const serverPath = resolveBranchSelectionPath(combinedMessages, serverAssistant.publicID);
-      if (serverPath.length > 0) {
-        setBranchSelections((prev) =>
-          applyBranchSelectionPath(
-            prev,
-            serverPath,
-            [pendingExchange.tempUserPublicID, pendingExchange.tempAssistantPublicID],
-          ),
-        );
+      if (exchange.assistantPending || !exchange.runID?.trim()) {
+        continue;
       }
-      setPendingExchange(null);
+      const serverAssistant = combinedMessages.find(
+        (item) =>
+          item.role === "assistant" &&
+          item.runID === exchange.runID &&
+          serverMessagePublicIDs.has(item.publicID) &&
+          !item.isPending &&
+          !item.isStreaming &&
+          item.status !== "pending",
+      );
+      if (!serverAssistant?.parentPublicID) {
+        continue;
+      }
+      completedKeys.push(exchangeKey);
+      completedBranches.push({
+        exchange,
+        userPublicID: serverAssistant.parentPublicID,
+        assistantPublicID: serverAssistant.publicID,
+      });
     }
-  }, [combinedMessages, pendingExchange, serverMessagePublicIDs, setBranchSelections, setPendingExchange]);
+    if (completedBranches.length > 0) {
+      setBranchSelections((current) =>
+        completedBranches.reduce(
+          (next, completed) =>
+            replaceCompletedBranchSelection(
+              next,
+              {
+                parentPublicID: completed.exchange.parentPublicID,
+                tempUserPublicID: completed.exchange.tempUserPublicID,
+                tempAssistantPublicID: completed.exchange.tempAssistantPublicID,
+                reuseUserMessage: completed.exchange.reuseUserMessage,
+              },
+              completed.userPublicID,
+              completed.assistantPublicID,
+            ),
+          current,
+        ),
+      );
+    }
+    if (completedKeys.length > 0) {
+      setPendingExchanges((current) => {
+        const next = { ...current };
+        for (const key of completedKeys) {
+          delete next[key];
+        }
+        return next;
+      });
+    }
+  }, [combinedMessages, pendingExchanges, serverMessagePublicIDs, setBranchSelections, setPendingExchanges]);
 
   const submitMessage = React.useCallback(
     async ({
@@ -355,6 +531,7 @@ export function useChatMessageSubmit({
       parentMessagePublicID,
       sourceMessagePublicID,
       branchReason,
+      queuedSubmission,
     }: {
       content: string;
       currentAttachments: PendingAttachment[];
@@ -362,12 +539,41 @@ export function useChatMessageSubmit({
       parentMessagePublicID?: string | null;
       sourceMessagePublicID?: string | null;
       branchReason?: "default" | "retry" | "edit";
+      queuedSubmission?: QueuedChatSubmission;
     }) => {
       const payloadContent = content || t("attachmentOnlyContent");
-      const requestPlatformModelName = selectedPlatformModelName.trim();
+      const requestPlatformModelName = (queuedSubmission?.platformModelName ?? selectedPlatformModelName).trim();
+      const requestOptions = queuedSubmission?.options ?? options;
+      const requestSelectedToolIDs = queuedSubmission?.selectedToolIDs ?? selectedToolIDs;
+      const requestSelectedSkills = queuedSubmission?.selectedSkills ?? selectedSkills;
+      const requestHTMLVisualPromptEnabled = queuedSubmission?.htmlVisualPromptEnabled ?? htmlVisualPromptEnabled;
+      const requestHTMLVisualColorMode = queuedSubmission?.htmlVisualColorMode ?? htmlVisualColorMode;
       const selectedModel = modelOptions.find((item) => item.platformModelName === requestPlatformModelName) ?? null;
-      if ((!content && currentAttachments.length === 0) || sending || uploading || activeStreamRef.current) {
+      const resolvedBranchReason = branchReason ?? "default";
+      const concurrentBranchRun = resolvedBranchReason === "retry" || resolvedBranchReason === "edit";
+      if (
+        (!content && currentAttachments.length === 0) ||
+        uploading ||
+        (!concurrentBranchRun && activeStreamsRef.current.size > 0)
+      ) {
         return false;
+      }
+      if (concurrentBranchRun) {
+        const activeRunIDs = new Set(activeStreamsRef.current.keys());
+        for (const message of combinedMessages) {
+          const runID = message.runID?.trim() || "";
+          if (
+            message.role === "assistant" &&
+            runID &&
+            (message.isPending || message.isStreaming || message.status?.trim().toLowerCase() === "pending")
+          ) {
+            activeRunIDs.add(runID);
+          }
+        }
+        if (activeRunIDs.size >= MAX_CONCURRENT_RUNS) {
+          toast.error(t("concurrentGenerationLimit", { count: MAX_CONCURRENT_RUNS }));
+          return false;
+        }
       }
       const effectiveAttachments =
         maxFilesPerMessage > 0 && currentAttachments.length > maxFilesPerMessage
@@ -378,7 +584,8 @@ export function useChatMessageSubmit({
           description: t("attachmentsTruncatedDescription", { count: maxFilesPerMessage }),
         });
       }
-      const submitDecision = resolveChatSubmitDecision(selectedModel, effectiveAttachments);
+      const sanitizedOptions = sanitizeConversationOptions(requestOptions);
+      const submitDecision = resolveChatSubmitDecision(selectedModel, effectiveAttachments, sanitizedOptions);
       if (submitDecision.blockedReason) {
         toast.error(t("mediaInputUnsupported"), {
           description: resolveSubmitBlockDescription(submitDecision.blockedReason, t),
@@ -392,62 +599,84 @@ export function useChatMessageSubmit({
       }
 
       const wasConversationMode = showConversationLayout || visibleMessageCount > 0;
-      const exchangeKey = `local-exchange-${Date.now()}`;
+      const clientRunID = createClientRunID();
+      const exchangeKey = `local-exchange-${clientRunID}`;
       const resolvedParentPublicID = resolvePersistedPublicID(parentMessagePublicID);
       const resolvedSourcePublicID = resolvePersistedPublicID(sourceMessagePublicID);
-      const resolvedBranchReason = branchReason ?? "default";
+      const assistantOnlyBranch =
+        resolvedBranchReason === "retry" &&
+        Boolean(resolvedParentPublicID && resolvedSourcePublicID) &&
+        combinedMessages.some((item) => item.publicID === resolvedSourcePublicID && item.role === "assistant");
+      const reusedUserMessage = assistantOnlyBranch
+        ? combinedMessages.find(
+            (item) => item.publicID === resolvedParentPublicID && item.role === "user",
+          ) ?? null
+        : null;
+      const pendingParentPublicID = assistantOnlyBranch
+        ? reusedUserMessage?.parentPublicID ?? null
+        : resolvedParentPublicID;
       const tempUserPublicID = `${exchangeKey}-user`;
       const tempAssistantPublicID = `${exchangeKey}-assistant`;
+      const pendingUserPublicID = assistantOnlyBranch && resolvedParentPublicID ? resolvedParentPublicID : tempUserPublicID;
       const createdAt = new Date().toISOString();
       let sentSuccessfully = false;
       let shouldKeepConversationLayout = false;
       const streamAbortController = new AbortController();
-      const clientRunID = createClientRunID();
-      const sanitizedOptions = sanitizeConversationOptions(options);
       const assistantImageAspectRatio =
-        submitTask === "chat" ? undefined : resolveImageLoadingAspectRatio(sanitizedOptions);
-      let targetConversationID = conversationID;
-      let targetConversation = activeConversation;
+        submitTask === "image_generation" || submitTask === "image_edit"
+          ? resolveImageLoadingAspectRatio(sanitizedOptions)
+          : undefined;
+      const assistantContentType =
+        submitTask === "chat" ? "markdown" : submitTask === "video_generation" ? "video" : "image";
+      let targetConversationID = conversationIDRef.current;
+      let targetConversation = activeConversationRef.current;
+      let metadataRefreshInFlight = false;
+      let modelRunSequence = 0;
 
       activeGenerationRunsRef?.current.add(clientRunID);
       setShowConversationLayout(true);
-      setSending(true);
-      activeStreamRef.current = {
+      activeStreamsRef.current.set(clientRunID, {
         controller: streamAbortController,
         runID: clientRunID,
         accessToken: null,
-      };
+      });
+      syncActiveRunCount();
       if (resetComposer) {
         setDraft("");
         setAttachments([]);
       }
-      startStream(exchangeKey);
-      setPendingExchange({
-        key: exchangeKey,
-        conversationPublicID: conversationID?.trim() || null,
-        tempUserPublicID,
-        tempAssistantPublicID,
-        runID: clientRunID,
-        platformModelName: requestPlatformModelName,
-        parentPublicID: resolvedParentPublicID,
-        sourcePublicID: resolvedSourcePublicID,
-        branchReason: resolvedBranchReason,
-        userContent: payloadContent,
-        userAttachments: effectiveAttachments.length > 0 ? effectiveAttachments : undefined,
-        userCreatedAt: createdAt,
-        assistantText: "",
-        assistantPending: true,
-        assistantStreaming: true,
-        assistantContentType: submitTask === "chat" ? "markdown" : "image",
-        assistantImageAspectRatio,
-        assistantInlineAlert: undefined,
-        assistantCreatedAt: createdAt,
-        assistantProcessTrace: undefined,
-      });
+      startStream(exchangeKey, clientRunID);
+      setPendingExchanges((current) => ({
+        ...current,
+        [exchangeKey]: {
+          key: exchangeKey,
+          conversationPublicID: targetConversationID?.trim() || null,
+          userPublicID: assistantOnlyBranch ? pendingUserPublicID : undefined,
+          tempUserPublicID,
+          tempAssistantPublicID,
+          runID: clientRunID,
+          platformModelName: requestPlatformModelName,
+          parentPublicID: pendingParentPublicID,
+          sourcePublicID: resolvedSourcePublicID,
+          branchReason: resolvedBranchReason,
+          reuseUserMessage: assistantOnlyBranch,
+          userContent: payloadContent,
+          userAttachments: effectiveAttachments.length > 0 ? effectiveAttachments : undefined,
+          userCreatedAt: createdAt,
+          assistantText: "",
+          assistantPending: true,
+          assistantStreaming: true,
+          assistantContentType,
+          assistantImageAspectRatio,
+          assistantInlineAlert: undefined,
+          assistantCreatedAt: createdAt,
+          assistantProcessTrace: undefined,
+        },
+      }));
       setBranchSelections((prev) => ({
         ...prev,
-        [toBranchKey(resolvedParentPublicID)]: tempUserPublicID,
-        [tempUserPublicID]: tempAssistantPublicID,
+        ...(assistantOnlyBranch ? {} : { [toBranchKey(resolvedParentPublicID)]: pendingUserPublicID }),
+        [pendingUserPublicID]: tempAssistantPublicID,
       }));
 
       try {
@@ -458,13 +687,38 @@ export function useChatMessageSubmit({
         if (!token) {
           throw new Error(t("signInRequired"));
         }
-        if (activeStreamRef.current?.controller === streamAbortController) {
-          activeStreamRef.current = {
+        const activeStream = activeStreamsRef.current.get(clientRunID);
+        if (activeStream?.controller === streamAbortController) {
+          activeStreamsRef.current.set(clientRunID, {
             controller: streamAbortController,
             runID: clientRunID,
             accessToken: token,
-          };
+          });
         }
+        let metadataFallbackTitle = "";
+        const startMetadataRefresh = (result?: SendMessageResult | null) => {
+          if (
+            !targetConversationID ||
+            metadataRefreshInFlight ||
+            !shouldPollGeneratedConversationMetadata(targetConversation, result, metadataFallbackTitle)
+          ) {
+            return;
+          }
+          metadataRefreshInFlight = true;
+          void refreshGeneratedConversationMetadata(
+            token,
+            targetConversationID,
+            targetConversation,
+            metadataFallbackTitle,
+            touchByPublicID,
+          )
+            .catch(() => {
+              // Metadata refresh failure does not affect this turn; the next list load will fetch server state.
+            })
+            .finally(() => {
+              metadataRefreshInFlight = false;
+            });
+        };
 
         if (!targetConversationID) {
           const created = await prependNewConversation(requestPlatformModelName);
@@ -476,20 +730,33 @@ export function useChatMessageSubmit({
           }
           targetConversationID = created.publicID;
           targetConversation = created;
-          setPendingExchange((prev) =>
-            prev && prev.key === exchangeKey
-              ? {
-                  ...prev,
-                  conversationPublicID: created.publicID,
-                }
-              : prev,
-          );
+          conversationIDRef.current = created.publicID;
+          activeConversationRef.current = created;
+          updatePendingExchange(exchangeKey, (current) => ({
+            ...current,
+            conversationPublicID: created.publicID,
+          }));
           // Update the URL without triggering Next.js RSC navigation, which can interrupt an active stream.
           window.history.replaceState(null, "", `/chat?conversation_id=${created.publicID}`);
           onConversationCreated?.(created.publicID);
         }
-        const shouldRefreshConversationMetadata = shouldRefreshGeneratedConversationMetadata(targetConversation, visibleMessageCount);
-
+        metadataFallbackTitle = conversationTitleFromFirstUserMessage(payloadContent);
+        const optimisticTitle = metadataFallbackTitle;
+        if (
+          targetConversationID &&
+          optimisticTitle &&
+          (!targetConversation || isPlaceholderConversationTitle(targetConversation.title))
+        ) {
+          if (targetConversation) {
+            targetConversation = {
+              ...targetConversation,
+              title: optimisticTitle,
+            };
+            activeConversationRef.current = targetConversation;
+          }
+          touchByPublicID(targetConversationID, { title: optimisticTitle });
+        }
+        startMetadataRefresh(null);
         const commonStreamPayload = {
           model: requestPlatformModelName,
           options: Object.keys(sanitizedOptions).length > 0 ? sanitizedOptions : undefined,
@@ -506,112 +773,101 @@ export function useChatMessageSubmit({
             terminalStreamError = event;
           },
           onFileProc: (message) => {
-            setPendingExchange((prev) =>
-              prev && prev.key === exchangeKey
-                ? { ...prev, assistantFileProc: true, assistantActivityLabel: message.trim() || t("processingAttachments") }
-                : prev,
-            );
+            updatePendingExchange(exchangeKey, (current) => ({
+              ...current,
+              assistantFileProc: true,
+              assistantActivityLabel: message.trim() || t("processingAttachments"),
+            }));
           },
           onRagSearch: (message) => {
-            setPendingExchange((prev) =>
-              prev && prev.key === exchangeKey
-                ? { ...prev, assistantFileProc: true, assistantActivityLabel: message.trim() || t("retrievingContent") }
-                : prev,
-            );
+            updatePendingExchange(exchangeKey, (current) => ({
+              ...current,
+              assistantFileProc: true,
+              assistantActivityLabel: message.trim() || t("retrievingContent"),
+            }));
           },
           onMediaStatus: (event) => {
-            const activityLabel = resolveMediaStatusLabel(event.status, event.message, t);
-            setPendingExchange((prev) =>
-              prev && prev.key === exchangeKey
-                ? { ...prev, assistantFileProc: true, assistantActivityLabel: activityLabel }
-                : prev,
-            );
+            const activityLabel = resolveMediaStatusLabel(event.status, event.message, event.content_type, t);
+            updatePendingExchange(exchangeKey, (current) => ({
+              ...current,
+              assistantFileProc: true,
+              assistantActivityLabel: activityLabel,
+            }));
           },
           onMediaImageDelta: (event) => {
             const previewMarkdown = buildMediaImagePreviewMarkdown(event, t("imagePreviewAlt"));
             if (!previewMarkdown) {
               return;
             }
-            setPendingExchange((prev) =>
-              prev && prev.key === exchangeKey
-                ? {
-                    ...prev,
-                    assistantPending: false,
-                    assistantStreaming: true,
-                    assistantFileProc: false,
-                    assistantActivityLabel: undefined,
-                    assistantText: previewMarkdown,
-                  }
-                : prev,
-            );
+            updatePendingExchange(exchangeKey, (current) => ({
+              ...current,
+              assistantPending: false,
+              assistantStreaming: true,
+              assistantFileProc: false,
+              assistantActivityLabel: undefined,
+              assistantText: previewMarkdown,
+            }));
           },
           onCompactDone: (event) => {
-            setPendingExchange((prev) =>
-              prev && prev.key === exchangeKey
-                ? { ...prev, compactDone: { method: event.method, freed_tokens: event.freed_tokens, summary_preview: event.summary_preview } }
-                : prev,
-            );
+            updatePendingExchange(exchangeKey, (current) => ({
+              ...current,
+              compactDone: { method: event.method, freed_tokens: event.freed_tokens, summary_preview: event.summary_preview },
+            }));
           },
           onProcessUpdate: (event) => {
-            setPendingExchange((prev) =>
-              prev && prev.key === exchangeKey
-                ? {
-                    ...prev,
-                    assistantFileProc: false,
-                    assistantActivityLabel: undefined,
-                    assistantProcessTrace: event.trace ? toPendingProcessTrace(event.trace) : prev.assistantProcessTrace,
-                  }
-                : prev,
-            );
+            updatePendingExchange(exchangeKey, (current) => ({
+              ...current,
+              assistantFileProc: false,
+              assistantActivityLabel: undefined,
+              assistantProcessTrace: event.trace ? toPendingProcessTrace(event.trace) : current.assistantProcessTrace,
+            }));
           },
           onUpstreamThinkDelta: (event) => {
-            setPendingExchange((prev) =>
-              prev && prev.key === exchangeKey
-                ? {
-                    ...prev,
-                    assistantProcessTrace: event.trace ? toPendingProcessTrace(event.trace) : prev.assistantProcessTrace,
-                  }
-                : prev,
-            );
+            enqueueUpstreamThinkDelta(exchangeKey, event);
           },
           onDelta: (delta) => {
             // Always clear assistantFileProc so batched React updates cannot keep the file_proc spinner alive.
-            setPendingExchange((prev) =>
-              prev && prev.key === exchangeKey && prev.assistantFileProc
-                ? { ...prev, assistantFileProc: false, assistantActivityLabel: undefined }
-                : prev,
+            updatePendingExchange(exchangeKey, (current) =>
+              current.assistantFileProc
+                ? { ...current, assistantFileProc: false, assistantActivityLabel: undefined }
+                : current,
             );
-            enqueueStreamText(delta);
+            enqueueStreamText(exchangeKey, delta);
           },
           onUsage: (event) => {
-            setPendingExchange((prev) =>
-              prev && prev.key === exchangeKey
-                ? {
-                    ...prev,
-                    assistantInputTokens: event.input_tokens > 0 ? event.input_tokens : prev.assistantInputTokens,
-                    assistantOutputTokens: event.output_tokens > 0 ? event.output_tokens : prev.assistantOutputTokens,
-                    assistantCacheReadTokens:
-                      event.cache_read_tokens > 0 ? event.cache_read_tokens : prev.assistantCacheReadTokens,
-                    assistantCacheWriteTokens:
-                      event.cache_write_tokens > 0 ? event.cache_write_tokens : prev.assistantCacheWriteTokens,
-                    assistantReasoningTokens:
-                      event.reasoning_tokens > 0 ? event.reasoning_tokens : prev.assistantReasoningTokens,
-                  }
-                : prev,
-            );
+            updatePendingExchange(exchangeKey, (current) => ({
+              ...current,
+              assistantInputTokens: event.input_tokens > 0 ? event.input_tokens : current.assistantInputTokens,
+              assistantOutputTokens: event.output_tokens > 0 ? event.output_tokens : current.assistantOutputTokens,
+              assistantCacheReadTokens:
+                event.cache_read_tokens > 0 ? event.cache_read_tokens : current.assistantCacheReadTokens,
+              assistantCacheWriteTokens:
+                event.cache_write_tokens > 0 ? event.cache_write_tokens : current.assistantCacheWriteTokens,
+              assistantReasoningTokens:
+                event.reasoning_tokens > 0 ? event.reasoning_tokens : current.assistantReasoningTokens,
+            }));
           },
         };
+        modelRunSequence = nextModelRunSequenceRef.current + 1;
+        nextModelRunSequenceRef.current = modelRunSequence;
         let completed: SendMessageResult;
         if (submitTask === "chat") {
           const chatPayload: SendMessageRequest = {
             ...commonStreamPayload,
             contentType: effectiveAttachments.length > 0 ? "mixed" : "text",
             content: payloadContent,
-            selectedToolIDs: selectedToolIDs.length > 0 ? selectedToolIDs : undefined,
-            htmlVisualPrompt: htmlVisualPromptEnabled || undefined,
-            htmlVisualColorMode: htmlVisualPromptEnabled ? htmlVisualColorMode : undefined,
+            selectedToolIDs: requestSelectedToolIDs.length > 0 ? requestSelectedToolIDs : undefined,
+            skillIDs: requestSelectedSkills.length > 0 ? requestSelectedSkills.map((skill) => skill.id) : undefined,
+            htmlVisualPrompt: requestHTMLVisualPromptEnabled || undefined,
+            htmlVisualColorMode: requestHTMLVisualPromptEnabled ? requestHTMLVisualColorMode : undefined,
           };
           completed = await streamConversationMessage(token, targetConversationID, chatPayload, streamOptions);
+        } else if (submitTask === "video_generation") {
+          const mediaPayload: MediaVideoRequest = {
+            ...commonStreamPayload,
+            prompt: payloadContent,
+          };
+          completed = await streamVideoGeneration(token, targetConversationID, mediaPayload, streamOptions);
         } else {
           const mediaPayload: MediaImageRequest = {
             ...commonStreamPayload,
@@ -625,15 +881,13 @@ export function useChatMessageSubmit({
 
         failedGenerationRunsRef?.current.delete(clientRunID);
         sentSuccessfully = true;
-        flushStreamTextNow();
-        resetStreamBuffer();
+        flushStreamTextNow(exchangeKey);
+        flushUpstreamThinkNow(exchangeKey);
+        resetStreamBuffer(exchangeKey);
         const assistantMessageStatus = completed.assistantMessage.status || "success";
         const assistantMessageSucceeded = assistantMessageStatus === "success";
-        setPendingExchange((prev) => {
-          if (!prev || prev.key !== exchangeKey) {
-            return prev;
-          }
-          const streamedText = prev.assistantText;
+        updatePendingExchange(exchangeKey, (current) => {
+          const streamedText = current.assistantText;
           const terminalErrorMessage = terminalStreamError
             ? resolveErrorMessage(streamEventErrorToApiError(terminalStreamError, t("retryLater")), terminalStreamError.message || t("retryLater"))
             : "";
@@ -649,10 +903,10 @@ export function useChatMessageSubmit({
               )
             : completed.assistantMessage.errorMessage;
           return {
-            ...prev,
+            ...current,
             userPublicID: completed.userMessage.publicID,
             assistantPublicID: completed.assistantMessage.publicID,
-            platformModelName: completed.assistantMessage.platformModelName?.trim() || prev.platformModelName,
+            platformModelName: completed.assistantMessage.platformModelName?.trim() || current.platformModelName,
             userContent: completed.userMessage.content,
             userServerMessageID: completed.userMessage.id,
             userCreatedAt: completed.userMessage.createdAt,
@@ -663,22 +917,23 @@ export function useChatMessageSubmit({
             assistantServerMessageID: completed.assistantMessage.id,
             assistantCreatedAt: completed.assistantMessage.createdAt,
             assistantUpdatedAt: completed.assistantMessage.updatedAt,
-            assistantContentType: completed.assistantMessage.contentType || prev.assistantContentType,
+            assistantContentType: completed.assistantMessage.contentType || current.assistantContentType,
+            assistantAttachments: parseAttachments(completed.assistantMessage.attachments),
             assistantInputTokens: resolveInputSideUsageValue(
               completed.assistantMessage.inputTokens,
               completed.userMessage.inputTokens,
-              prev.assistantInputTokens,
+              current.assistantInputTokens,
             ),
             assistantOutputTokens: completed.assistantMessage.outputTokens,
             assistantCacheReadTokens: resolveInputSideUsageValue(
               completed.assistantMessage.cacheReadTokens,
               completed.userMessage.cacheReadTokens,
-              prev.assistantCacheReadTokens,
+              current.assistantCacheReadTokens,
             ),
             assistantCacheWriteTokens: resolveInputSideUsageValue(
               completed.assistantMessage.cacheWriteTokens,
               completed.userMessage.cacheWriteTokens,
-              prev.assistantCacheWriteTokens,
+              current.assistantCacheWriteTokens,
             ),
             assistantReasoningTokens: completed.assistantMessage.reasoningTokens,
             assistantLatencyMS: completed.assistantMessage.latencyMS,
@@ -696,67 +951,69 @@ export function useChatMessageSubmit({
                 : undefined,
             assistantText:
               streamedText === completed.assistantMessage.content
-                ? prev.assistantText
+                ? current.assistantText
                 : completed.assistantMessage.content,
           };
         });
-        setBranchSelections((prev) =>
-          applyBranchSelectionPath(
-            prev,
-            [
-              {
-                parentPublicID: completed.userMessage.parentPublicID || resolvedParentPublicID,
-                publicID: completed.userMessage.publicID,
-              },
-              {
-                parentPublicID: completed.userMessage.publicID,
-                publicID: completed.assistantMessage.publicID,
-              },
-            ],
-            [tempUserPublicID, tempAssistantPublicID],
+        setBranchSelections((current) =>
+          replaceCompletedBranchSelection(
+            current,
+            {
+              parentPublicID: resolvedParentPublicID,
+              tempUserPublicID,
+              tempAssistantPublicID,
+              reuseUserMessage: assistantOnlyBranch,
+            },
+            completed.userMessage.publicID,
+            completed.assistantMessage.publicID,
           ),
         );
-        touchByPublicID(
-          targetConversationID,
-          toConversationPatch(targetConversation, requestPlatformModelName),
-        );
-        if (assistantMessageSucceeded && shouldRefreshConversationMetadata) {
-          void refreshGeneratedConversationMetadata(
-            token,
-            targetConversationID,
-            targetConversation,
-            touchByPublicID,
-          ).catch(() => {
-            // Metadata refresh failure does not affect this turn; the next list load will fetch server state.
-          });
+        const currentConversation =
+          activeConversationRef.current?.publicID === targetConversationID
+            ? activeConversationRef.current
+            : targetConversation;
+        const shouldUpdateConversationModel =
+          modelRunSequence > latestCompletedModelRunSequenceRef.current;
+        if (shouldUpdateConversationModel) {
+          latestCompletedModelRunSequenceRef.current = modelRunSequence;
+        }
+        const conversationPatch: Partial<ConversationDTO> = {
+          ...(shouldUpdateConversationModel ? { model: requestPlatformModelName } : {}),
+          updatedAt: new Date().toISOString(),
+          messageCount: (currentConversation?.messageCount ?? 0) + (assistantOnlyBranch ? 1 : 2),
+        };
+        if (currentConversation) {
+          activeConversationRef.current = { ...currentConversation, ...conversationPatch };
+        }
+        touchByPublicID(targetConversationID, conversationPatch);
+        if (assistantMessageSucceeded) {
+          startMetadataRefresh(completed);
         }
         releaseAttachments(effectiveAttachments);
         if (assistantMessageSucceeded) {
           notifyResponseCompletion({
             content: completed.assistantMessage.content,
             conversationPublicID: targetConversationID,
-            conversationTitle: targetConversation?.title || "DEEIX Chat",
+            conversationTitle: targetConversation?.title || brandText.title,
           });
         }
         reload();
       } catch (error) {
-        flushStreamTextNow();
-        resetStreamBuffer();
+        flushStreamTextNow(exchangeKey);
+        flushUpstreamThinkNow(exchangeKey);
+        resetStreamBuffer(exchangeKey);
         if (streamAbortController.signal.aborted) {
           shouldKeepConversationLayout = true;
           releaseAttachments(effectiveAttachments);
-          setPendingExchange((prev) =>
-            prev && prev.key === exchangeKey
-              ? {
-                  ...prev,
-                  assistantPending: false,
-                  assistantStreaming: false,
-                  assistantFileProc: false,
-                  assistantActivityLabel: undefined,
-                  assistantInlineAlert: undefined,
-                }
-              : prev,
-          );
+          updatePendingExchange(exchangeKey, (current) => ({
+            ...current,
+            assistantPending: false,
+            assistantStreaming: false,
+            assistantFileProc: false,
+            assistantActivityLabel: undefined,
+            assistantProcessTrace: readLiveUpstreamThinkTrace(clientRunID) ?? current.assistantProcessTrace,
+            assistantInlineAlert: undefined,
+          }));
           return false;
         }
         const errorMessage = resolveErrorMessage(error, t("retryLater"));
@@ -768,48 +1025,45 @@ export function useChatMessageSubmit({
           setDraft(content);
           setAttachments(currentAttachments);
         }
-        setPendingExchange((prev) =>
-          prev && prev.key === exchangeKey
-            ? {
-                ...prev,
-                assistantPending: false,
-                assistantStreaming: false,
-                assistantFileProc: false,
-                assistantActivityLabel: undefined,
-                assistantStatus: "error",
-                assistantErrorMessage: errorMessage,
-                assistantInlineAlert: {
-                  title: t("generationInterrupted"),
-                  message: errorMessage,
-                  details: errorDetails,
-                },
-              }
-            : prev,
-        );
+        updatePendingExchange(exchangeKey, (current) => ({
+          ...current,
+          assistantPending: false,
+          assistantStreaming: false,
+          assistantFileProc: false,
+          assistantActivityLabel: undefined,
+          assistantProcessTrace: readLiveUpstreamThinkTrace(clientRunID) ?? current.assistantProcessTrace,
+          assistantStatus: "error",
+          assistantErrorMessage: errorMessage,
+          assistantInlineAlert: {
+            title: t("generationInterrupted"),
+            message: errorMessage,
+            details: errorDetails,
+          },
+        }));
         toast.error(t("sendFailed"), { description: errorSummary });
         if (targetConversationID) {
           reload();
         }
         return false;
       } finally {
-        if (activeStreamRef.current?.controller === streamAbortController) {
-          activeStreamRef.current = null;
+        if (activeStreamsRef.current.get(clientRunID)?.controller === streamAbortController) {
+          activeStreamsRef.current.delete(clientRunID);
         }
         activeGenerationRunsRef?.current.delete(clientRunID);
         if (!sentSuccessfully && !wasConversationMode && !shouldKeepConversationLayout) {
           setShowConversationLayout(false);
         }
-        setSending(false);
+        syncActiveRunCount();
       }
       return true;
     },
     [
-      activeConversation,
       activeGenerationRunsRef,
       failedGenerationRunsRef,
-      conversationID,
+      enqueueUpstreamThinkDelta,
       enqueueStreamText,
       flushStreamTextNow,
+      flushUpstreamThinkNow,
       options,
       onConversationCreated,
       prependNewConversation,
@@ -819,14 +1073,14 @@ export function useChatMessageSubmit({
       restoreDraftOnFailure,
       modelOptions,
       selectedToolIDs,
+      selectedSkills,
       htmlVisualPromptEnabled,
       htmlVisualColorMode,
       selectedPlatformModelName,
-      sending,
       setAttachments,
       setBranchSelections,
       setDraft,
-      setPendingExchange,
+      setPendingExchanges,
       setShowConversationLayout,
       showConversationLayout,
       startStream,
@@ -834,22 +1088,116 @@ export function useChatMessageSubmit({
       uploading,
       maxFilesPerMessage,
       t,
+      syncActiveRunCount,
+      updatePendingExchange,
       visibleMessageCount,
+      combinedMessages,
     ],
   );
 
+  const enqueueSubmission = React.useCallback(() => {
+    const content = draft.trim();
+    const currentAttachments = attachments.slice();
+    if ((!content && currentAttachments.length === 0) || uploading) {
+      return false;
+    }
+    setQueuedSubmissions((current) => [
+      ...current,
+      {
+        id: createClientRunID().replace("run_", "queue_"),
+        content,
+        attachments: currentAttachments,
+        platformModelName: selectedPlatformModelName,
+        options: sanitizeConversationOptions(options),
+        selectedToolIDs: selectedToolIDs.slice(),
+        selectedSkills: selectedSkills.slice(),
+        htmlVisualPromptEnabled,
+        htmlVisualColorMode,
+      },
+    ]);
+    setDraft("");
+    setAttachments([]);
+    return true;
+  }, [
+    attachments,
+    draft,
+    htmlVisualColorMode,
+    htmlVisualPromptEnabled,
+    options,
+    selectedPlatformModelName,
+    selectedSkills,
+    selectedToolIDs,
+    setAttachments,
+    setDraft,
+    uploading,
+  ]);
+
   const onStopMessage = React.useCallback(() => {
-    const active = activeStreamRef.current;
+    const visibleRunID = currentLeafMessage?.runID?.trim() || "";
+    const visibleRunPending = Boolean(
+      visibleRunID &&
+        (currentLeafMessage?.isPending ||
+          currentLeafMessage?.isStreaming ||
+          currentLeafMessage?.status?.trim().toLowerCase() === "pending"),
+    );
+    const visibleActive = visibleRunID ? activeStreamsRef.current.get(visibleRunID) : undefined;
+    if (!visibleActive && visibleRunPending) {
+      void resolveAccessToken().then(async (token) => {
+        if (!token) {
+          return;
+        }
+        await cancelMessageGeneration(token, visibleRunID).catch(() => undefined);
+        reload();
+      });
+      return true;
+    }
+    const active = visibleActive ?? Array.from(activeStreamsRef.current.values()).at(-1);
     if (!active) {
-      return;
+      return false;
     }
     if (active.accessToken) {
       void cancelMessageGeneration(active.accessToken, active.runID).catch(() => undefined);
     }
     active.controller.abort();
+    return true;
+  }, [
+    currentLeafMessage?.isPending,
+    currentLeafMessage?.isStreaming,
+    currentLeafMessage?.runID,
+    currentLeafMessage?.status,
+    reload,
+  ]);
+
+  const onDeleteQueuedMessage = React.useCallback((id: string) => {
+    const target = queuedSubmissionsRef.current.find((item) => item.id === id);
+    if (target) {
+      releaseAttachments(target.attachments);
+    }
+    setQueuedSubmissions((current) => current.filter((item) => item.id !== id));
+  }, [releaseAttachments]);
+
+  const onEditQueuedMessage = React.useCallback((id: string, content: string) => {
+    setQueuedSubmissions((current) =>
+      current.map((item) => (item.id === id ? { ...item, content: content.trim() } : item)),
+    );
+  }, []);
+
+  const onGuideQueuedMessage = React.useCallback((id: string) => {
+    setQueuedSubmissions((current) => {
+      const target = current.find((item) => item.id === id);
+      if (!target) {
+        return current;
+      }
+      return [target, ...current.filter((item) => item.id !== id)];
+    });
+    sendQueuedAfterCurrentRef.current = true;
   }, []);
 
   const onSendMessage = React.useCallback(async () => {
+    if (activeStreamsRef.current.size > 0 || sending || resumeGenerationActive) {
+      enqueueSubmission();
+      return;
+    }
     const content = draft.trim();
     const parentMessagePublicID =
       resolvePersistedPublicID(currentLeafMessage?.publicID) ??
@@ -862,7 +1210,59 @@ export function useChatMessageSubmit({
       parentMessagePublicID,
       branchReason: "default",
     });
-  }, [attachments, currentLeafMessage?.publicID, draft, submitMessage, visibleMessages]);
+  }, [attachments, currentLeafMessage?.publicID, draft, enqueueSubmission, resumeGenerationActive, sending, submitMessage, visibleMessages]);
+
+  React.useEffect(() => {
+    const hasUnresolvedDefaultExchange = Object.values(pendingExchanges).some(
+      (exchange) => exchange.branchReason === "default" && !exchange.assistantPublicID,
+    );
+    const hasPendingServerGeneration = combinedMessages.some(
+      (message) =>
+        message.role === "assistant" &&
+        (message.isPending ||
+          message.isStreaming ||
+          message.status?.trim().toLowerCase() === "pending"),
+    );
+    if (
+      sending ||
+      resumeGenerationActive ||
+      activeStreamsRef.current.size > 0 ||
+      hasPendingServerGeneration ||
+      (hasUnresolvedDefaultExchange && !sendQueuedAfterCurrentRef.current) ||
+      queuedSubmissions.length === 0 ||
+      uploading
+    ) {
+      return;
+    }
+    const queuedSubmission = queuedSubmissions[0];
+    if (!queuedSubmission) {
+      return;
+    }
+    sendQueuedAfterCurrentRef.current = false;
+    setQueuedSubmissions((current) => current.filter((item) => item.id !== queuedSubmission.id));
+    const parentMessagePublicID =
+      resolvePersistedPublicID(currentLeafMessage?.publicID) ??
+      resolveDefaultSubmissionParentMessage(visibleMessages)?.publicID ??
+      null;
+    void submitMessage({
+      content: queuedSubmission.content,
+      currentAttachments: queuedSubmission.attachments,
+      resetComposer: false,
+      parentMessagePublicID,
+      branchReason: "default",
+      queuedSubmission,
+    });
+  }, [
+    combinedMessages,
+    currentLeafMessage?.publicID,
+    pendingExchanges,
+    queuedSubmissions,
+    resumeGenerationActive,
+    sending,
+    submitMessage,
+    uploading,
+    visibleMessages,
+  ]);
 
   const onRetryUserMessage = React.useCallback(
     async (message: ChatAreaMessage) => {
@@ -890,8 +1290,9 @@ export function useChatMessageSubmit({
         toast.error(t("retryReplyFailed"), { description: t("retryReplyMissingUser") });
         return;
       }
-      const sourceMessagePublicID = resolvePersistedPublicID(parentUser.publicID);
-      if (!sourceMessagePublicID) {
+      const parentUserPublicID = resolvePersistedPublicID(parentUser.publicID);
+      const assistantSourceMessagePublicID = resolvePersistedPublicID(message.publicID);
+      if (!parentUserPublicID || !assistantSourceMessagePublicID) {
         toast.error(t("retryReplyFailed"), { description: t("continueReplyUnavailable") });
         return;
       }
@@ -899,8 +1300,8 @@ export function useChatMessageSubmit({
         content: parentUser.content.trim(),
         currentAttachments: toPendingAttachments(parentUser),
         resetComposer: false,
-        parentMessagePublicID: parentUser.parentPublicID,
-        sourceMessagePublicID,
+        parentMessagePublicID: parentUserPublicID,
+        sourceMessagePublicID: assistantSourceMessagePublicID,
         branchReason: "retry",
       });
     },
@@ -1006,6 +1407,14 @@ export function useChatMessageSubmit({
     onRetryUserMessage,
     onSendMessage,
     onStopMessage,
+    onDeleteQueuedMessage,
+    onEditQueuedMessage,
+    onGuideQueuedMessage,
+    queuedMessages: queuedSubmissions.map((item) => ({
+      id: item.id,
+      content: item.content,
+      attachmentCount: item.attachments.length,
+    })),
     sending,
   };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Sparkles, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useTranslations } from "next-intl";
 
@@ -37,7 +37,8 @@ import {
   type PricingMode,
   type PricingFormState,
   type TieredPricingTierForm,
-} from "@/features/admin/model/billing-page";
+} from "@/features/admin/model/billing-settings";
+import type { PermissionGroup } from "@/features/admin/api/permission-groups";
 
 type PricingJSONValue = Record<string, unknown>;
 
@@ -151,6 +152,7 @@ type PlanBillingDialogProps = {
   saving: boolean;
   planForm: PlanFormState | null;
   setPlanForm: React.Dispatch<React.SetStateAction<PlanFormState | null>>;
+  permissionGroups: PermissionGroup[];
   onOpenChange: (open: boolean) => void;
   onCancel: () => void;
   onSubmit: (event?: React.FormEvent<HTMLFormElement>) => void;
@@ -161,6 +163,7 @@ export function PlanBillingDialog({
   saving,
   planForm,
   setPlanForm,
+  permissionGroups,
   onOpenChange,
   onCancel,
   onSubmit,
@@ -217,6 +220,26 @@ export function PlanBillingDialog({
                     <Input value={planForm.description} onChange={(event) => setPlanForm({ ...planForm, description: event.target.value })} />
                   </div>
                 </div>
+
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">{t("plans.permissionGroup")}</p>
+                  <Select
+                    value={planForm.permissionGroupID}
+                    onValueChange={(value) => setPlanForm({ ...planForm, permissionGroupID: value })}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {permissionGroups.map((group) => (
+                        <SelectItem key={group.id} value={String(group.id)}>
+                          {group.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] leading-5 text-muted-foreground">{t("plans.permissionGroupDescription")}</p>
+                </div>
               </>
             ) : null}
           </div>
@@ -246,6 +269,7 @@ type PricingBillingDialogProps = {
   onAddTier: () => void;
   onRemoveTier: (index: number) => void;
   onUpdateTier: (index: number, patch: Partial<TieredPricingTierForm>) => void;
+  onOpenOfficialPricing: () => void;
 };
 
 export function PricingBillingDialog({
@@ -259,13 +283,13 @@ export function PricingBillingDialog({
   onAddTier,
   onRemoveTier,
   onUpdateTier,
+  onOpenOfficialPricing,
 }: PricingBillingDialogProps) {
   const t = useTranslations("adminBilling");
   const tActions = useTranslations("common.actions");
   const [editorMode, setEditorMode] = React.useState<"form" | "json">("form");
   const [jsonDraft, setJSONDraft] = React.useState("");
   const [jsonError, setJSONError] = React.useState("");
-  const lastSyncedJSONRef = React.useRef("");
   const pricingMultiplierError = form && parseValidPricingMultiplier(form.pricingMultiplier) === null ? t("modelPricing.jsonErrors.multiplier") : "";
 
   React.useEffect(() => {
@@ -273,13 +297,11 @@ export function PricingBillingDialog({
       setEditorMode("form");
       setJSONDraft("");
       setJSONError("");
-      lastSyncedJSONRef.current = "";
       return;
     }
     const nextJSON = pricingFormToJSON(form);
     if (editorMode !== "json") {
       setJSONDraft(nextJSON);
-      lastSyncedJSONRef.current = nextJSON;
       setJSONError("");
     }
   }, [editorMode, form, open]);
@@ -298,7 +320,6 @@ export function PricingBillingDialog({
         tiered: t("modelPricing.jsonErrors.tiered"),
       });
       setJSONError("");
-      lastSyncedJSONRef.current = value;
       setForm(nextForm);
     } catch (error) {
       setJSONError(error instanceof Error ? error.message : t("modelPricing.jsonErrors.invalid"));
@@ -315,7 +336,6 @@ export function PricingBillingDialog({
     setForm(nextForm);
     setJSONDraft(nextJSON);
     setJSONError("");
-    lastSyncedJSONRef.current = nextJSON;
   }, [form, setForm]);
 
   return (
@@ -340,8 +360,21 @@ export function PricingBillingDialog({
               <>
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">{t("modelPricing.platformModel")}</p>
-                <div className="flex h-8 items-center rounded-md border border-input/40 bg-muted/30 px-3 text-xs">
-                  <span className="truncate">{form.platformModelName}</span>
+                <div className="flex items-center gap-2">
+                  <Input value={form.platformModelName} className="min-w-0 flex-1 cursor-default text-foreground placeholder:text-muted-foreground" readOnly />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-8 shrink-0 px-2.5 text-xs shadow-none"
+                    disabled={saving}
+                    onClick={onOpenOfficialPricing}
+                    aria-label={t("modelPricing.officialPricing")}
+                    title={t("modelPricing.officialPricing")}
+                  >
+                    <Sparkles className="size-3.5 stroke-1" />
+                    {t("modelPricing.officialPricing")}
+                  </Button>
                 </div>
               </div>
 

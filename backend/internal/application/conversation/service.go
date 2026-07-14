@@ -16,6 +16,7 @@ import (
 	appupload "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/upload"
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	domainmemory "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/memory"
+	domainskill "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/skill"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/embedding"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/llm"
@@ -48,6 +49,10 @@ type memoryRecorder interface {
 	UpsertUserMemoryEmbedding(ctx context.Context, userID uint, memoryKey string, expectedValue string, embedding []float32) error
 }
 
+type skillResolver interface {
+	ResolveAvailable(ctx context.Context, userID uint, id uint) (*domainskill.Skill, error)
+}
+
 type auditWriter interface {
 	Write(ctx context.Context, requestID string, actorUserID uint, action string, resource string, resourceID string, ip string, userAgent string, detail interface{})
 }
@@ -75,6 +80,7 @@ type Service struct {
 	processingSvc     *appprocessing.Service
 	extractSvc        *extraction.Service
 	ragSvc            *apprag.Service
+	skillResolver     skillResolver
 	billingSvc        *appbilling.Service
 	auditWriter       auditWriter
 	storeProvider     appstorage.Provider
@@ -133,6 +139,7 @@ type SendMessageInput struct {
 	ClientRunID             string
 	FileIDs                 []string
 	SelectedToolIDs         []uint
+	SkillIDs                []uint
 	HTMLVisualPromptEnabled bool
 	HTMLVisualColorMode     string
 	ParentMessagePublicID   string
@@ -143,24 +150,34 @@ type SendMessageInput struct {
 	OnEvent func(eventType string, payload map[string]interface{}) error
 }
 
+// SetSkillResolver 注入会话技能解析器。
+func (s *Service) SetSkillResolver(resolver skillResolver) {
+	s.skillResolver = resolver
+}
+
 // SendMessageResult 返回用户消息与 AI 消息。
 type SendMessageResult struct {
-	UserMessage         model.Message
-	AssistantMessage    model.Message
-	Billable            bool
-	UpstreamID          uint
-	UpstreamName        string
-	PlatformModelName   string
-	RoutedBindingCode   string
-	UpstreamModelName   string
-	UpstreamProtocol    string
-	EffectiveOptions    map[string]interface{}
-	UsageSpeed          string
-	UsageServiceTier    string
-	CacheWrite5mTokens  int64
-	CacheWrite1hTokens  int64
-	ServerSideToolUsage map[string]int64
-	LatencyMS           int64
+	UserMessage           model.Message
+	AssistantMessage      model.Message
+	MetadataRefreshHint   string
+	Billable              bool
+	UpstreamID            uint
+	UpstreamName          string
+	PlatformModelName     string
+	RoutedBindingCode     string
+	UpstreamModelName     string
+	UpstreamProtocol      string
+	EffectiveOptions      map[string]interface{}
+	UsageSpeed            string
+	UsageServiceTier      string
+	RawUsageJSON          string
+	CacheWrite5mTokens    int64
+	CacheWrite1hTokens    int64
+	ServerSideToolUsage   map[string]int64
+	LatencyMS             int64
+	DurationSeconds       int64
+	StartedAt             time.Time
+	postBillingCompaction *postBillingCompactionTask
 }
 
 // MessageFeedbackResult 返回反馈后的当前状态（内部传输，不携带序列化标记）。
@@ -252,6 +269,7 @@ func NewServiceWithRuntime(
 			InvalidFileReference: ErrInvalidFileReference,
 			InvalidFileName:      ErrInvalidFileName,
 			FileNotFound:         ErrFileNotFound,
+			FileInUse:            ErrFileInUse,
 			StorageQuotaExceeded: ErrStorageQuotaExceeded,
 			FileTooLarge:         ErrFileTooLarge,
 			MIMEBlocked:          ErrMIMEBlocked,

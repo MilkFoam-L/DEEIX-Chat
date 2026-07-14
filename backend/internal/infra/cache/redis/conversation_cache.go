@@ -291,7 +291,7 @@ func (c *conversationCache) GetGenerationStreamOwner(ctx context.Context, runID 
 		}
 		return 0, false, err
 	}
-	value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
+	value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, strconv.IntSize)
 	if err != nil || value == 0 {
 		return 0, false, nil
 	}

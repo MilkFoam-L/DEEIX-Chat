@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/llm"
 )
 
@@ -45,6 +46,49 @@ func TestBuildToolTraceMarksReusedCallsAsCompleted(t *testing.T) {
 	items := normalizeTraceToolCalls(payload["tool_calls"])
 	if len(items) != 1 || items[0]["status"] != "reused" {
 		t.Fatalf("expected reused payload status, got %#v", items)
+	}
+}
+
+func TestBuildToolTraceStoresPreviewMetadataInsteadOfFullOutput(t *testing.T) {
+	largeOutput := `{"content":[{"type":"text","text":"` + strings.Repeat("x", 4096) + `"}]}`
+	_, _, payload := buildToolTrace([]model.ToolCall{{
+		ToolCallID: "call_1",
+		ToolName:   "fetch",
+		Status:     "success",
+		InputJSON:  `{"url":"https://example.com/large"}`,
+		OutputJSON: largeOutput,
+	}})
+
+	items := normalizeTraceToolCalls(payload["tool_calls"])
+	if len(items) != 1 {
+		t.Fatalf("expected one tool call, got %#v", items)
+	}
+	item := items[0]
+	if _, ok := item["output"]; ok {
+		t.Fatalf("tool trace must not store full output: %#v", item)
+	}
+	if _, ok := item["output_text"]; ok {
+		t.Fatalf("tool trace must not store expanded output text: %#v", item)
+	}
+	if _, ok := item["input"]; ok {
+		t.Fatalf("tool trace must not store full input: %#v", item)
+	}
+	if got := traceInt64(item["output_size"]); got != int64(len(largeOutput)) {
+		t.Fatalf("expected output size metadata, got %d", got)
+	}
+	if item["output_truncated"] != true {
+		t.Fatalf("expected truncated output marker, got %#v", item["output_truncated"])
+	}
+	if got := strings.TrimSpace(getTraceString(item["input_detail"])); got != `{"url":"https://example.com/large"}` {
+		t.Fatalf("expected full small input detail, got %q", got)
+	}
+	detail := strings.TrimSpace(getTraceString(item["output_detail"]))
+	if detail == "" || detail == largeOutput || len([]rune(detail)) > toolTraceDetailMaxChars+3 {
+		t.Fatalf("expected bounded output detail, got len=%d", len([]rune(detail)))
+	}
+	preview := strings.TrimSpace(getTraceString(item["output_preview"]))
+	if preview == "" || strings.Contains(preview, strings.Repeat("x", 512)) {
+		t.Fatalf("expected compact output preview, got %q", preview)
 	}
 }
 
@@ -99,6 +143,115 @@ func TestBuildMessageProcessTraceDTOIncludesOrderedEvents(t *testing.T) {
 	}
 	if trace.Events[0].EventID != "tools_1" || trace.Events[0].EventType != "tool" {
 		t.Fatalf("unexpected event payload: %#v", trace.Events[0])
+	}
+}
+
+func TestProcessTraceStaysStreamingUntilNextVisiblePhase(t *testing.T) {
+	recorder := &messageTraceRecorder{
+		cfg: config.Config{
+			ProcessTraceEnabled:            true,
+			ProcessTraceVisibleToUser:      true,
+			ProcessTraceStoreUpstreamThink: true,
+		},
+		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_1"},
+	}
+
+	recorder.appendProcessSection("文件已就绪", "**文件上下文**：已纳入。", nil, messageTraceStatusStreaming)
+	recorder.recordPromptTrace(&model.MessagePromptTrace{Mode: "full", SentMessageCount: 2})
+
+	if recorder.process == nil || recorder.process.status != messageTraceStatusStreaming {
+		t.Fatalf("expected process trace to stay streaming after prompt trace, got %#v", recorder.process)
+	}
+	if trace := recorder.snapshot(); trace == nil || trace.Process == nil || trace.Process.Status != messageTraceStatusStreaming {
+		t.Fatalf("expected visible snapshot to stay streaming, got %#v", trace)
+	}
+
+	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "开始思考", nil)
+
+	if recorder.process.status != messageTraceStatusCompleted {
+		t.Fatalf("expected process trace to complete when reasoning starts, got %q", recorder.process.status)
+	}
+}
+
+func TestUpstreamThinkingDeltaIsCoalescedBetweenFlushes(t *testing.T) {
+	eventCount := 0
+	var events []map[string]interface{}
+	recorder := &messageTraceRecorder{
+		cfg: config.Config{
+			ProcessTraceEnabled:            true,
+			ProcessTraceVisibleToUser:      true,
+			ProcessTraceStoreUpstreamThink: true,
+		},
+		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_1"},
+		onEvent: func(eventType string, payload map[string]interface{}) error {
+			if eventType == "upstream_think_delta" {
+				eventCount++
+				events = append(events, payload)
+			}
+			return nil
+		},
+	}
+
+	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "a", nil)
+	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "b", nil)
+	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "c", nil)
+
+	if eventCount != 1 {
+		t.Fatalf("expected dense thinking deltas to be coalesced after first flush, got %d events", eventCount)
+	}
+	if len(events) != 1 || events[0]["delta"] != "a" {
+		t.Fatalf("expected first live event to carry only first delta, got %#v", events)
+	}
+	if _, ok := events[0]["trace"]; ok {
+		t.Fatalf("live thinking delta must not carry full trace: %#v", events[0])
+	}
+	if _, ok := events[0]["block"]; ok {
+		t.Fatalf("live thinking delta must not carry full block: %#v", events[0])
+	}
+	if recorder.upstreamThink == nil || recorder.upstreamThink.contentMarkdown != "abc" {
+		t.Fatalf("expected full reasoning to remain in memory snapshot, got %#v", recorder.upstreamThink)
+	}
+
+	recorder.completeUpstreamThink()
+	if eventCount != 2 {
+		t.Fatalf("expected completion to emit final thinking snapshot, got %d events", eventCount)
+	}
+	if events[1]["delta"] != "bc" || events[1]["status"] != messageTraceStatusCompleted {
+		t.Fatalf("expected completion to flush coalesced delta with completed status, got %#v", events[1])
+	}
+}
+
+func TestUpstreamThinkingLiveDeltaSkipsOversizedContent(t *testing.T) {
+	var events []map[string]interface{}
+	recorder := &messageTraceRecorder{
+		cfg: config.Config{
+			ProcessTraceEnabled:            true,
+			ProcessTraceVisibleToUser:      true,
+			ProcessTraceStoreUpstreamThink: true,
+		},
+		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_1"},
+		onEvent: func(eventType string, payload map[string]interface{}) error {
+			if eventType == "upstream_think_delta" {
+				events = append(events, payload)
+			}
+			return nil
+		},
+	}
+
+	largeDelta := strings.Repeat("x", upstreamThinkLiveReplaceBytes+1)
+	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, largeDelta, nil)
+
+	if len(events) != 1 {
+		t.Fatalf("expected one lightweight status event, got %d", len(events))
+	}
+	if _, ok := events[0]["delta"]; ok {
+		t.Fatalf("oversized thinking delta must not be sent in live event: %#v", events[0])
+	}
+	if _, ok := events[0]["contentMarkdown"]; ok {
+		t.Fatalf("oversized thinking content must not be sent in live event: %#v", events[0])
+	}
+	if recorder.upstreamThink == nil || recorder.upstreamThink.contentMarkdown != largeDelta {
+		t.Fatal("expected oversized thinking content to remain available for final trace")
 	}
 }
 
@@ -357,20 +510,6 @@ func TestToolOutputPreviewFallsBackForNonMCPJSON(t *testing.T) {
 	}
 }
 
-func TestToolOutputTextUsesReadableSearchResults(t *testing.T) {
-	raw := `[{"url":"https://example.com/a"},{"title":"新闻","url":"https://example.com/b"}]`
-	if got := toolOutputText(raw); got != "https://example.com/a；新闻 https://example.com/b" {
-		t.Fatalf("expected readable search result text, got %q", got)
-	}
-}
-
-func TestCitationsToolOutputJSONBuildsSearchOutput(t *testing.T) {
-	raw := citationsToolOutputJSON([]string{"https://example.com/a", " ", "https://example.com/b"})
-	if got := toolOutputText(raw); got != "https://example.com/a；https://example.com/b" {
-		t.Fatalf("expected citations output text, got %q from raw %q", got, raw)
-	}
-}
-
 func TestServerSideOnlyToolsRenderBeforeFinalThinking(t *testing.T) {
 	output := &llm.GenerateOutput{
 		ServerToolCalls: []llm.ToolCall{{ToolType: "x_search_call", ToolName: "x_search"}},
@@ -412,18 +551,123 @@ func TestToolExecutionLedgerNormalizesArguments(t *testing.T) {
 
 func TestBudgetToolOutputForModelKeepsSmallResults(t *testing.T) {
 	raw := `{"content":[{"type":"text","text":"small result"}]}`
-	if got := budgetToolOutputForModel(raw, 100); got != raw {
+	if got := budgetToolOutputForModel(model.ToolCall{OutputJSON: raw}, 100, false); got != raw {
 		t.Fatalf("expected small tool result to stay unchanged, got %q", got)
 	}
 }
 
+func TestBudgetToolOutputForModelKeepsNormalizedJSONWhenItFits(t *testing.T) {
+	raw := "{\n  \"ok\": true,\n  \"items\": [\n    1,\n    2\n  ]\n}"
+	got := budgetToolOutputForModel(model.ToolCall{OutputJSON: raw}, 32, false)
+	if got != `{"items":[1,2],"ok":true}` {
+		t.Fatalf("expected normalized JSON to fit without truncation envelope, got %q", got)
+	}
+}
+
 func TestBudgetToolOutputForModelWrapsLargeResults(t *testing.T) {
-	raw := `{"content":[{"type":"text","text":"` + strings.Repeat("a", 80) + `"}]}`
-	got := budgetToolOutputForModel(raw, 40)
+	raw := `{"content":[{"type":"text","text":"` + strings.Repeat("a", 80) + `TAIL"}]}`
+	got := budgetToolOutputForModel(model.ToolCall{OutputJSON: raw}, 80, false)
 	if !strings.Contains(got, "truncated_for_model") {
 		t.Fatalf("expected budgeted result marker, got %q", got)
 	}
-	if !strings.Contains(got, "full result is retained") {
-		t.Fatalf("expected retention note, got %q", got)
+	if strings.Contains(got, "server-side tool call record") {
+		t.Fatalf("did not expect retention note without persistence, got %q", got)
+	}
+	if !strings.Contains(got, "TAIL") {
+		t.Fatalf("expected budgeted model result to preserve tail context, got %q", got)
+	}
+	if !strings.Contains(got, "head_tail") {
+		t.Fatalf("expected budget metadata to describe head/tail selection, got %q", got)
+	}
+}
+
+func TestBudgetToolOutputForModelOmitsOpaqueSingleLinePayload(t *testing.T) {
+	raw := strings.Repeat("A", 4096)
+	got := budgetToolOutputForModel(model.ToolCall{OutputJSON: raw}, 800, false)
+	if !strings.Contains(got, "Large opaque tool result omitted") {
+		t.Fatalf("expected opaque payload notice, got %q", got)
+	}
+	if !strings.Contains(got, `"content_type":"opaque"`) {
+		t.Fatalf("expected opaque content type metadata, got %q", got)
+	}
+	if strings.Count(got, strings.Repeat("A", 512)) > 1 {
+		t.Fatalf("expected opaque payload to be bounded, got %d chars", len(got))
+	}
+}
+
+func TestBudgetToolOutputForModelUsesPersistedReferenceForLargeStoredResult(t *testing.T) {
+	raw := "HEAD\n" + strings.Repeat("x", toolResultReferenceThresholdChars) + "\nTAIL"
+	row := model.ToolCall{
+		ToolCallID: "call_large",
+		ToolName:   "fetch_large",
+		RunID:      "run_1",
+		OutputJSON: raw,
+	}
+	got := budgetToolOutputForModel(row, toolResultModelBudgetChars, true)
+	if !strings.HasPrefix(got, "<persisted-tool-output") {
+		t.Fatalf("expected persisted output reference, got %q", got)
+	}
+	if !strings.Contains(got, `id="call_large"`) || !strings.Contains(got, `run_id="run_1"`) {
+		t.Fatalf("expected stable tool identifiers in reference, got %q", got)
+	}
+	if strings.Contains(got, "TAIL") {
+		t.Fatalf("expected reference preview to include only bounded leading content, got %q", got)
+	}
+}
+
+func TestEnforceToolResultAggregateBudgetReplacesLargestPersistedResults(t *testing.T) {
+	large := strings.Repeat("a", toolResultAggregateBudgetChars/2)
+	small := strings.Repeat("b", toolResultAggregateBudgetChars/3)
+	slots := []toolExecutionSlot{
+		{
+			row: model.ToolCall{
+				ToolCallID: "call_a",
+				ToolName:   "tool_a",
+				RunID:      "run_1",
+				Status:     "success",
+				OutputJSON: large,
+			},
+			result:    llm.ToolResult{ToolCallID: "call_a", OutputJSON: large, Status: "success"},
+			persisted: true,
+		},
+		{
+			row: model.ToolCall{
+				ToolCallID: "call_b",
+				ToolName:   "tool_b",
+				RunID:      "run_1",
+				Status:     "success",
+				OutputJSON: large,
+			},
+			result:    llm.ToolResult{ToolCallID: "call_b", OutputJSON: large, Status: "success"},
+			persisted: true,
+		},
+		{
+			row: model.ToolCall{
+				ToolCallID: "call_c",
+				ToolName:   "tool_c",
+				RunID:      "run_1",
+				Status:     "success",
+				OutputJSON: small,
+			},
+			result:    llm.ToolResult{ToolCallID: "call_c", OutputJSON: small, Status: "success"},
+			persisted: true,
+		},
+	}
+
+	enforceToolResultAggregateBudget(slots)
+
+	replaced := 0
+	total := 0
+	for _, slot := range slots {
+		total += len([]rune(slot.result.OutputJSON))
+		if strings.HasPrefix(slot.result.OutputJSON, "<persisted-tool-output") {
+			replaced++
+		}
+	}
+	if replaced == 0 {
+		t.Fatalf("expected at least one aggregate replacement, got %#v", slots)
+	}
+	if total > toolResultAggregateBudgetChars {
+		t.Fatalf("expected aggregate model-visible output under budget, got %d", total)
 	}
 }

@@ -10,6 +10,8 @@ func (m *Module) RegisterPublicRoutes(api *gin.RouterGroup) {
 	api.POST("/auth/2fa/verify", m.Handler.VerifyTwoFactorLogin)
 	api.POST("/auth/register/email/start", m.Handler.StartEmailRegistration)
 	api.POST("/auth/register/email/complete", m.Handler.CompleteEmailRegistration)
+	api.POST("/auth/password/reset/start", m.Handler.StartPasswordReset)
+	api.POST("/auth/password/reset/complete", m.Handler.CompletePasswordReset)
 	api.POST("/auth/refresh", m.Handler.RefreshToken)
 	api.GET("/auth/providers/:slug/start", m.Handler.StartProviderLogin)
 	api.GET("/auth/providers/:slug/callback", m.Handler.ProviderCallback)

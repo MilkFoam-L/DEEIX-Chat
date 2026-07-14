@@ -4,14 +4,20 @@ import * as React from "react";
 import { useTranslations } from "next-intl";
 
 import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
-import { cancelMessageGeneration, listMessages, resumeMessageGenerationStream } from "@/shared/api/conversation";
+import { cancelMessageGeneration, listMessagesPage, resumeMessageGenerationStream } from "@/shared/api/conversation";
 import { buildMediaImagePreviewMarkdown } from "@/features/chat/model/media-image-preview";
+import { upsertLiveUpstreamThinkTrace } from "@/features/chat/model/upstream-think-store";
 import type { MessageDTO } from "@/shared/api/conversation.types";
+
+const MESSAGE_PAGE_SIZE = 100;
 
 type ChatDataState = {
   loading: boolean;
+  loadingOlder: boolean;
   errorMsg: string;
   messages: MessageDTO[];
+  total: number;
+  hasOlder: boolean;
 };
 
 type ActiveResumeStream = {
@@ -19,6 +25,50 @@ type ActiveResumeStream = {
   runID: string;
   accessToken: string | null;
 };
+
+type ResumeTextReplayState = {
+  baseContent: string;
+  replayedContent: string;
+  visibleContent: string;
+};
+
+function appendResumedTextDelta(state: ResumeTextReplayState, delta: string): string {
+  if (!delta) {
+    return state.visibleContent;
+  }
+
+  state.replayedContent += delta;
+  const { baseContent, replayedContent } = state;
+  if (!baseContent) {
+    state.visibleContent = replayedContent;
+    return state.visibleContent;
+  }
+
+  if (
+    replayedContent === baseContent ||
+    baseContent.startsWith(replayedContent) ||
+    baseContent.includes(replayedContent)
+  ) {
+    state.visibleContent = baseContent;
+    return state.visibleContent;
+  }
+
+  if (replayedContent.startsWith(baseContent)) {
+    state.visibleContent = replayedContent;
+    return state.visibleContent;
+  }
+
+  const maxOverlapLength = Math.min(baseContent.length, replayedContent.length);
+  for (let length = maxOverlapLength; length > 0; length -= 1) {
+    if (baseContent.endsWith(replayedContent.slice(0, length))) {
+      state.visibleContent = `${baseContent}${replayedContent.slice(length)}`;
+      return state.visibleContent;
+    }
+  }
+
+  state.visibleContent = `${state.visibleContent}${delta}`;
+  return state.visibleContent;
+}
 
 export function useChatData(
   conversationID: string | null,
@@ -34,13 +84,20 @@ export function useChatData(
   const tSubmit = useTranslations("chat.submit");
   const [state, setState] = React.useState<ChatDataState>({
     loading: Boolean(conversationID),
+    loadingOlder: false,
     errorMsg: "",
     messages: [],
+    total: 0,
+    hasOlder: false,
   });
   const [reloadToken, setReloadToken] = React.useState(0);
   const [resumingRunID, setResumingRunID] = React.useState("");
+  const stateRef = React.useRef(state);
+  stateRef.current = state;
   const previousConversationIDRef = React.useRef<string | null>(conversationID);
   const resumeSeqByRunRef = React.useRef<Record<string, number>>({});
+  const pendingAssistantContentRef = React.useRef("");
+  const resumeTextReplayByRunRef = React.useRef<Record<string, ResumeTextReplayState>>({});
   const activeResumeStreamRef = React.useRef<ActiveResumeStream | null>(null);
 
   React.useEffect(() => {
@@ -50,8 +107,11 @@ export function useChatData(
       if (!conversationID) {
         setState({
           loading: false,
+          loadingOlder: false,
           errorMsg: "",
           messages: [],
+          total: 0,
+          hasOlder: false,
         });
         return;
       }
@@ -60,8 +120,11 @@ export function useChatData(
       previousConversationIDRef.current = conversationID;
       setState((prev) => ({
         loading: isConversationSwitch || prev.messages.length === 0,
+        loadingOlder: false,
         errorMsg: "",
         messages: isConversationSwitch ? [] : prev.messages,
+        total: isConversationSwitch ? 0 : prev.total,
+        hasOlder: isConversationSwitch ? false : prev.hasOlder,
       }));
       try {
         const token = await resolveAccessToken();
@@ -69,28 +132,50 @@ export function useChatData(
           if (!cancelled) {
             setState({
               loading: false,
+              loadingOlder: false,
               errorMsg: t("signInRequired"),
               messages: [],
+              total: 0,
+              hasOlder: false,
             });
           }
           return;
         }
 
-        const messages = await listMessages(token, conversationID);
+        const data = await listMessagesPage(token, conversationID, {
+          page: 1,
+          pageSize: MESSAGE_PAGE_SIZE,
+          tail: true,
+        });
         if (cancelled) {
           return;
         }
 
-        setState({
-          loading: false,
-          errorMsg: "",
-          messages,
+        setState((prev) => {
+          const firstTailMessageID = data.results[0]?.id ?? 0;
+          // 只有已加载过额外历史页时才保留旧区间，避免普通 reload 无限累积 tail 消息。
+          const loadedOlderMessages =
+            isConversationSwitch ||
+            firstTailMessageID <= 0 ||
+            prev.messages.length <= MESSAGE_PAGE_SIZE
+              ? []
+              : prev.messages.filter((message) => message.id < firstTailMessageID);
+          const messages = [...loadedOlderMessages, ...data.results];
+          return {
+            loading: false,
+            loadingOlder: false,
+            errorMsg: "",
+            messages,
+            total: data.total,
+            hasOlder: messages.length < data.total,
+          };
         });
       } catch {
         if (!cancelled) {
           setState((prev) => ({
             ...prev,
             loading: false,
+            loadingOlder: false,
             errorMsg: t("loadFailed"),
           }));
         }
@@ -115,6 +200,85 @@ export function useChatData(
       ),
     }));
   }, []);
+
+  const loadOlderMessages = React.useCallback(async () => {
+    const current = stateRef.current;
+    if (!conversationID || current.loading || current.loadingOlder || !current.hasOlder || current.messages.length === 0) {
+      return false;
+    }
+
+    const beforeID = current.messages[0]?.id ?? 0;
+    if (beforeID <= 0) {
+      setState((prev) => {
+        const next = { ...prev, hasOlder: false };
+        stateRef.current = next;
+        return next;
+      });
+      return false;
+    }
+
+    setState((prev) => {
+      const next = { ...prev, loadingOlder: true };
+      stateRef.current = next;
+      return next;
+    });
+    try {
+      const token = await resolveAccessToken();
+      if (!token) {
+        setState((prev) => {
+          const next = { ...prev, loadingOlder: false, hasOlder: false };
+          stateRef.current = next;
+          return next;
+        });
+        return false;
+      }
+
+      const data = await listMessagesPage(token, conversationID, {
+        pageSize: MESSAGE_PAGE_SIZE,
+        beforeID,
+      });
+      if (previousConversationIDRef.current !== conversationID) {
+        return false;
+      }
+      let loaded = false;
+      setState((prev) => {
+        const existingPublicIDs = new Set(prev.messages.map((message) => message.publicID));
+        const olderMessages = data.results.filter((message) => !existingPublicIDs.has(message.publicID));
+        const messages = [...olderMessages, ...prev.messages];
+        loaded = olderMessages.length > 0;
+        const next = {
+          ...prev,
+          loadingOlder: false,
+          messages,
+          total: data.total,
+          hasOlder: loaded && messages.length < data.total,
+        };
+        stateRef.current = next;
+        return next;
+      });
+      return loaded;
+    } catch {
+      setState((prev) => {
+        const next = { ...prev, loadingOlder: false };
+        stateRef.current = next;
+        return next;
+      });
+      return false;
+    }
+  }, [conversationID]);
+
+  const loadAllOlderMessages = React.useCallback(async ({ maxPages = 50 }: { maxPages?: number } = {}) => {
+    for (let iteration = 0; iteration < maxPages; iteration += 1) {
+      if (!stateRef.current.hasOlder) {
+        return true;
+      }
+      const loaded = await loadOlderMessages();
+      if (!loaded) {
+        return !stateRef.current.hasOlder;
+      }
+    }
+    return !stateRef.current.hasOlder;
+  }, [loadOlderMessages]);
 
   const cancelResumedGeneration = React.useCallback(async () => {
     const active = activeResumeStreamRef.current;
@@ -148,6 +312,10 @@ export function useChatData(
   const pendingRunID = pendingAssistant?.runID?.trim() || "";
 
   React.useEffect(() => {
+    pendingAssistantContentRef.current = pendingAssistant?.content ?? "";
+  }, [pendingAssistant?.content]);
+
+  React.useEffect(() => {
     if (
       !conversationID ||
       !pendingRunID ||
@@ -161,6 +329,16 @@ export function useChatData(
     const controller = new AbortController();
     let closed = false;
     const afterSeq = resumeSeqByRunRef.current[pendingRunID] ?? 0;
+    const baseContent = pendingAssistantContentRef.current;
+    const resumeTextReplayByRun = resumeTextReplayByRunRef.current;
+    const clearResumeTextReplay = () => {
+      delete resumeTextReplayByRun[pendingRunID];
+    };
+    resumeTextReplayByRun[pendingRunID] = {
+      baseContent,
+      replayedContent: afterSeq > 0 ? baseContent : "",
+      visibleContent: baseContent,
+    };
     activeResumeStreamRef.current = {
       controller,
       runID: pendingRunID,
@@ -185,24 +363,26 @@ export function useChatData(
           },
           onMediaStatus: (event) => {
             const status = event.status.trim();
+            const contentType = event.content_type === "video" ? "video" : "image";
             const activityLabel =
               status === "queued"
-                ? tSubmit("mediaStatus.queued")
+                ? tSubmit(contentType === "video" ? "mediaStatus.videoQueued" : "mediaStatus.queued")
                 : status === "running"
-                  ? tSubmit("mediaStatus.running")
+                  ? tSubmit(contentType === "video" ? "mediaStatus.videoRunning" : "mediaStatus.running")
                   : status === "saving_artifact"
-                    ? tSubmit("mediaStatus.savingArtifact")
+                    ? tSubmit(contentType === "video" ? "mediaStatus.videoSavingArtifact" : "mediaStatus.savingArtifact")
                     : event.message.trim() || status;
             setState((prev) => ({
               ...prev,
               messages: prev.messages.map((message) =>
                 message.runID === pendingRunID && message.role === "assistant" && message.status === "pending"
-                  ? { ...message, activityLabel, contentType: "image" }
+                  ? { ...message, activityLabel, contentType }
                   : message,
               ),
             }));
           },
           onMediaImageDelta: (event) => {
+            clearResumeTextReplay();
             const previewMarkdown = buildMediaImagePreviewMarkdown(event, tSubmit("imagePreviewAlt"));
             if (!previewMarkdown) {
               return;
@@ -217,11 +397,19 @@ export function useChatData(
             }));
           },
           onDelta: (delta) => {
+            const replayState =
+              resumeTextReplayByRun[pendingRunID] ??
+              (resumeTextReplayByRun[pendingRunID] = {
+                baseContent: "",
+                replayedContent: "",
+                visibleContent: "",
+              });
+            const nextContent = appendResumedTextDelta(replayState, delta);
             setState((prev) => ({
               ...prev,
               messages: prev.messages.map((message) =>
                 message.runID === pendingRunID && message.role === "assistant" && message.status === "pending"
-                  ? { ...message, content: `${message.content}${delta}` }
+                  ? { ...message, content: nextContent }
                   : message,
               ),
             }));
@@ -237,14 +425,7 @@ export function useChatData(
             }));
           },
           onUpstreamThinkDelta: (event) => {
-            setState((prev) => ({
-              ...prev,
-              messages: prev.messages.map((message) =>
-                message.runID === pendingRunID && message.role === "assistant" && message.status === "pending"
-                  ? { ...message, processTrace: event.trace }
-                  : message,
-              ),
-            }));
+            upsertLiveUpstreamThinkTrace(pendingRunID, event);
           },
           onUsage: (event) => {
             setState((prev) => ({
@@ -268,14 +449,17 @@ export function useChatData(
           },
         });
         if (!controller.signal.aborted && completed === null) {
+          clearResumeTextReplay();
           reload();
         }
         if (!controller.signal.aborted && completed) {
           delete resumeSeqByRunRef.current[pendingRunID];
+          clearResumeTextReplay();
           reload();
         }
       } catch (error) {
         if (!controller.signal.aborted && error instanceof Error && error.name !== "AbortError") {
+          clearResumeTextReplay();
           setResumingRunID("");
           reload();
         }
@@ -293,6 +477,7 @@ export function useChatData(
     return () => {
       closed = true;
       controller.abort();
+      clearResumeTextReplay();
       if (activeResumeStreamRef.current?.controller === controller) {
         activeResumeStreamRef.current = null;
       }
@@ -320,6 +505,8 @@ export function useChatData(
   return {
     ...state,
     cancelResumedGeneration,
+    loadOlderMessages,
+    loadAllOlderMessages,
     reload,
     replaceMessage,
     resumingRunID,

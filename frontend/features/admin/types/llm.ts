@@ -1,5 +1,4 @@
 import type { AdminLLMModelDTO, AdminLLMModelVendor, AdminLLMStatus } from "@/features/admin/api/llm.types";
-import { resolveLocalizedErrorMessage } from "@/i18n/resolve-error-message";
 import { MODEL_KIND_META, resolveProtocolLabel } from "@/features/admin/utils/llm-display";
 import { parseKindsJSON, stringifyKinds } from "@/shared/model/llm-schema";
 import { KNOWN_VENDOR_OPTIONS } from "@/shared/lib/model-identity";
@@ -25,17 +24,19 @@ export const MODEL_SORT_OPTIONS = [
 export type ModelSortValue = (typeof MODEL_SORT_OPTIONS)[number]["value"];
 
 export const ADAPTER_LABELS: Record<string, string> = {
-  openai_responses:         resolveProtocolLabel("openai_responses"),
-  openai_chat_completions:  resolveProtocolLabel("openai_chat_completions"),
+  openai_responses: resolveProtocolLabel("openai_responses"),
+  openrouter_chat_completions: resolveProtocolLabel("openrouter_chat_completions"),
+  openrouter_responses: resolveProtocolLabel("openrouter_responses"),
+  openai_chat_completions: resolveProtocolLabel("openai_chat_completions"),
   openai_image_generations: resolveProtocolLabel("openai_image_generations"),
-  openai_image_edits:       resolveProtocolLabel("openai_image_edits"),
+  openai_image_edits: resolveProtocolLabel("openai_image_edits"),
   openai_video_generations: resolveProtocolLabel("openai_video_generations"),
-  anthropic_messages:       resolveProtocolLabel("anthropic_messages"),
-  google_generate_content:  resolveProtocolLabel("google_generate_content"),
-  google_image_generation:  resolveProtocolLabel("google_image_generation"),
-  xai_responses:            resolveProtocolLabel("xai_responses"),
-  xai_image:                resolveProtocolLabel("xai_image"),
-  xai_image_edits:          resolveProtocolLabel("xai_image_edits"),
+  anthropic_messages: resolveProtocolLabel("anthropic_messages"),
+  google_generate_content: resolveProtocolLabel("google_generate_content"),
+  google_image_generation: resolveProtocolLabel("google_image_generation"),
+  xai_responses: resolveProtocolLabel("xai_responses"),
+  xai_image: resolveProtocolLabel("xai_image"),
+  xai_image_edits: resolveProtocolLabel("xai_image_edits"),
 };
 
 // ---------------------------------------------------------------------------
@@ -61,10 +62,6 @@ export type ModelFormPayload = {
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
-
-export function resolveErrorMessage(error: unknown): string {
-  return resolveLocalizedErrorMessage(error);
-}
 
 export function formatDateTime(value: string | null | undefined, locale = "en-US"): string {
   if (!value) return "-";

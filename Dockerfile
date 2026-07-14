@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS frontend-builder
+FROM node:24-bookworm-slim AS frontend-builder
 
 WORKDIR /src/frontend
 
@@ -10,10 +10,32 @@ ENV PATH=$PNPM_HOME:$PATH
 ARG NEXT_PUBLIC_API_BASE_URL=""
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
+ARG NEXT_PUBLIC_LOGO_URL=""
+ARG NEXT_PUBLIC_FAVICON_URL=""
+ARG NEXT_PUBLIC_PWA_ICON_192_URL=""
+ARG NEXT_PUBLIC_PWA_ICON_512_URL=""
+ARG NEXT_PUBLIC_PWA_MASKABLE_ICON_512_URL=""
+ARG NEXT_PUBLIC_APPLE_TOUCH_ICON_180_URL=""
+ARG NEXT_PUBLIC_BRAND_TITLE=""
+ARG NEXT_PUBLIC_BRAND_SHORT_NAME=""
+ARG NEXT_PUBLIC_BRAND_DESCRIPTION=""
+
+ENV NEXT_PUBLIC_LOGO_URL=${NEXT_PUBLIC_LOGO_URL}
+ENV NEXT_PUBLIC_FAVICON_URL=${NEXT_PUBLIC_FAVICON_URL}
+ENV NEXT_PUBLIC_PWA_ICON_192_URL=${NEXT_PUBLIC_PWA_ICON_192_URL}
+ENV NEXT_PUBLIC_PWA_ICON_512_URL=${NEXT_PUBLIC_PWA_ICON_512_URL}
+ENV NEXT_PUBLIC_PWA_MASKABLE_ICON_512_URL=${NEXT_PUBLIC_PWA_MASKABLE_ICON_512_URL}
+ENV NEXT_PUBLIC_APPLE_TOUCH_ICON_180_URL=${NEXT_PUBLIC_APPLE_TOUCH_ICON_180_URL}
+ENV NEXT_PUBLIC_BRAND_TITLE=${NEXT_PUBLIC_BRAND_TITLE}
+ENV NEXT_PUBLIC_BRAND_SHORT_NAME=${NEXT_PUBLIC_BRAND_SHORT_NAME}
+ENV NEXT_PUBLIC_BRAND_DESCRIPTION=${NEXT_PUBLIC_BRAND_DESCRIPTION}
+
 COPY VERSION /src/VERSION
 COPY scripts /src/scripts
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 COPY frontend/scripts ./scripts
+COPY frontend/public/pwa ./public/pwa
+COPY frontend/public/sw.js ./public/sw.js
 
 RUN corepack enable
 
@@ -28,16 +50,18 @@ RUN --mount=type=cache,id=next-cache,target=/src/frontend/.next/cache \
     pnpm build
 
 
-FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS backend-builder
+FROM golang:1.26-bookworm AS backend-builder
 
 WORKDIR /src/backend
 
-ARG TARGETOS
-ARG TARGETARCH
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=""
 COPY VERSION /src/VERSION
 COPY backend/go.mod backend/go.sum ./
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends libsqlite3-dev \
+  && rm -rf /var/lib/apt/lists/*
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
@@ -48,15 +72,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     VERSION="$(cat /src/VERSION)" \
     && if [ -z "${BUILD_TIME}" ]; then BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; fi \
-    && CGO_ENABLED=0 \
-       GOOS=${TARGETOS} \
-       GOARCH=${TARGETARCH} \
+    && CGO_ENABLED=1 \
        go build -trimpath \
        -ldflags="-s -w -X github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/buildinfo.Version=${VERSION} -X github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/buildinfo.Commit=${GIT_COMMIT} -X github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/buildinfo.BuildTime=${BUILD_TIME}" \
        -o /out/deeix-chat ./cmd/server
 
 
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS runtime-deps
+FROM debian:bookworm-slim AS runtime-deps
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates tzdata \
@@ -73,9 +95,12 @@ COPY --from=runtime-deps /etc/localtime /etc/localtime
 COPY --from=runtime-deps /etc/timezone /etc/timezone
 COPY --from=backend-builder /out/deeix-chat /app/deeix-chat
 COPY --from=frontend-builder /src/frontend/out /app/frontend/out
+COPY LICENSE NOTICE /app/licenses/DEEIX-Chat/
+
+ENV FRONTEND_DIST_DIR=/app/frontend/out
 
 EXPOSE 8080
 
-VOLUME ["/app/storage"]
+VOLUME ["/app/storage", "/app/data"]
 
 CMD ["/app/deeix-chat"]

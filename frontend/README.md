@@ -8,7 +8,7 @@ DEEIX Chat 前端是基于 Next.js App Router 的管理与对话界面，负责�
 - React 19
 - TypeScript
 - Tailwind CSS
-- shadcn/ui 风格组件
+- Shadcn/UI
 - Radix UI / Base UI
 - lucide-react
 - Streamdown / KaTeX / Mermaid
@@ -29,6 +29,25 @@ DEEIX Chat 前端是基于 Next.js App Router 的管理与对话界面，负责�
 - `shared/hooks/`：跨业务复用 hooks
 - `shared/lib/`：通用工具函数
 - `public/`：静态资源
+
+### Feature 文件组织
+
+前端业务代码优先按 `features/<domain>` 组织，`app/` 路由文件只负责挂载页面组件或 route layout。复杂业务域参考 `features/admin` 的拆分方式：
+
+- `api/`：该业务域自己的接口封装和接口 DTO。跨业务、用户侧通用或基础资源接口放到 `shared/api/`。
+- `components/`：该业务域的页面外壳、侧边栏、通用业务组件。
+- `components/sections/`：页面级 section。简单页面可以是单文件，例如 `sections/about/settings-about.tsx`；复杂页面按页面功能建目录，例如 `sections/subscription/settings-subscription.tsx`。
+- `components/sections/<page>/settings-<page>.tsx`：页面入口组件，负责组织该页面的主要板块，不承载过多独立弹窗、表格、图表或编辑器实现。
+- `components/sections/<page>/<page>-<feature>.tsx`：页面内的具体功能组件，例如弹窗、表格、图表、编辑器、批量操作面板。只有当功能边界清晰、能提升阅读和维护时才拆分。
+- `components/sections/shared/`：仅放同一业务域多个 section 复用的组件。跨业务复用时放到 `shared/components/`。
+- `hooks/`：页面或业务流程状态编排，例如加载、筛选、乐观更新、批量操作。不要把复杂请求状态散落在大型组件中。
+- `model/`：纯业务模型、常量、映射、排序、格式化前的语义转换。这里不写 React 组件和副作用。
+- `types/`：业务域内部 UI 状态和表单类型。接口类型优先放在对应 `api/*.types.ts` 或 `shared/api/*.types.ts`。
+- `utils/`：业务域内部展示、错误解析、格式化等工具。只有多个业务域都需要时才上移到 `shared/lib/`。
+
+拆分目标是让文件边界表达业务结构，而不是追求文件数量。一个页面通常先按可见板块拆分，例如订阅页可以按“订阅 / 趋势 / 日志”组织；板块内部再按清晰功能拆出 `*-dialog`、`*-table`、`*-chart` 等子文件。简单页面保持单文件即可。
+
+`shared/` 只放真正跨业务域复用的能力：基础 API client、认证会话、通用 UI、跨页面 hooks、通用格式化和平台工具。不要把某个 feature 的临时业务逻辑提前放进 `shared/`。
 
 主要路由：
 
@@ -76,7 +95,7 @@ Markdown 渲染统一使用聊天消息组件，支持基础 Markdown、代码�
 
 ## 本地启动
 
-先确保 PostgreSQL、Redis 和后端 API 可用。可以直接使用完整 Docker Compose 启动后端容器：
+先确保后端 API 可用。可以直接使用完整 Docker Compose 启动 PostgreSQL + Redis 版本：
 
 ```bash
 cd ..
@@ -88,6 +107,13 @@ docker compose -f docker-compose.full.yml up -d
 ```bash
 cd backend
 make run
+```
+
+如果只需要本地轻量模式，可以用 SQLite + 进程内缓存启动后端，不需要 PostgreSQL 和 Redis：
+
+```bash
+cd backend
+APP_ENV=dev DATABASE_DRIVER=sqlite CACHE_DRIVER=memory SQLITE_PATH=../data/deeix.db STORAGE_ROOT_DIR=../storage go run ./cmd/server
 ```
 
 启动前端：

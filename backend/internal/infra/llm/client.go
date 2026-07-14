@@ -27,6 +27,8 @@ const (
 	EndpointImageGenerations = "image_generations"
 	// EndpointImageEdits 表示 OpenAI Images API 编辑端点。
 	EndpointImageEdits = "image_edits"
+	// EndpointInteractions 表示 Gemini Interactions API 端点。
+	EndpointInteractions = "interactions"
 )
 
 // 超时默认值。
@@ -126,16 +128,22 @@ type GenerateInput struct {
 	RequestID      string
 	ConversationID uint
 	Messages       []Message
-	Tools          []ToolDefinition
+	// Instructions 承载可映射到上游原生指令字段的系统/开发者指令。
+	// 不支持原生指令字段的 adapter 应继续通过 messages 承载系统提示。
+	Instructions string
+	Tools        []ToolDefinition
 	// DisableTools 表示本轮调用必须只生成文本，adapter 不再声明 MCP 或厂商原生工具。
 	DisableTools bool
 	// Options 承载本次调用的自由 JSON 参数。系统字段（model/messages/input/stream）
 	// 由 adapter 固定构造；Options 只表达采样、推理、工具、缓存和厂商原生扩展。
 	Options map[string]interface{}
-	// PreviousResponseID 供 OpenAI/xAI Responses API 实现有状态会话。
+	// PreviousResponseID 供 OpenAI Responses API 实现有状态会话。
 	// 非空时：仅在 input 中发送本轮新消息，服务端从存储状态续接历史。
 	// 空串时：退回全量发送模式，适用于所有 adapter。
 	PreviousResponseID string
+	// ResponsesBackground 表示官方 OpenAI Responses 请求使用 background mode。
+	// 这是服务端能力开关，不从用户 Options 透传，避免改变未显式启用模型的数据保留语义。
+	ResponsesBackground bool
 	// ImageEditMask 仅供图片编辑 adapter 使用，表示透明区域掩码。
 	ImageEditMask *ContentPart
 }
@@ -491,6 +499,7 @@ type Usage struct {
 	ReasoningTokens    int64
 	Speed              string
 	ServiceTier        string
+	RawUsageJSON       string
 }
 
 func nonCachedInputTokens(totalInputTokens int64, cacheReadTokens int64) int64 {
@@ -507,15 +516,98 @@ func nonCachedInputTokens(totalInputTokens int64, cacheReadTokens int64) int64 {
 	return remaining
 }
 
+func rawUsageJSONFromPath(payload map[string]interface{}, keys ...string) string {
+	if len(payload) == 0 || len(keys) == 0 {
+		return ""
+	}
+	var current interface{} = payload
+	for _, key := range keys {
+		currentMap, ok := current.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		current, ok = currentMap[key]
+		if !ok {
+			return ""
+		}
+	}
+	switch value := current.(type) {
+	case map[string]interface{}:
+		if len(value) == 0 {
+			return ""
+		}
+	case []interface{}:
+		if len(value) == 0 {
+			return ""
+		}
+	default:
+		return ""
+	}
+	raw, err := json.Marshal(current)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func MergeRawUsageJSON(left string, right string) string {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" {
+		return right
+	}
+	if right == "" || right == left {
+		return left
+	}
+	items := make([]interface{}, 0, 2)
+	items = appendRawUsageJSON(items, left)
+	items = appendRawUsageJSON(items, right)
+	if len(items) == 0 {
+		return ""
+	}
+	if len(items) == 1 {
+		raw, err := json.Marshal(items[0])
+		if err != nil {
+			return ""
+		}
+		return string(raw)
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func appendRawUsageJSON(items []interface{}, raw string) []interface{} {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return items
+	}
+	var decoded interface{}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return items
+	}
+	switch value := decoded.(type) {
+	case []interface{}:
+		return append(items, value...)
+	case map[string]interface{}:
+		return append(items, value)
+	default:
+		return items
+	}
+}
+
 // ToolCall 记录上游返回的工具调用请求。
 type ToolCall struct {
-	ToolCallID    string
-	ToolType      string
-	ToolName      string
-	ArgumentsJSON string
-	Status        string
-	OutputJSON    string
-	ErrorJSON     string
+	ToolCallID       string
+	ToolType         string
+	ToolName         string
+	ArgumentsJSON    string
+	ThoughtSignature string
+	Status           string
+	OutputJSON       string
+	ErrorJSON        string
 }
 
 // ToolResult 记录工具执行结果，由各 adapter 序列化为对应 SDK/API 所需格式。
@@ -548,8 +640,11 @@ type GenerateOutput struct {
 	ServerSideToolUsage map[string]int64
 	Citations           []string
 	GeneratedImages     []GeneratedImage
+	GeneratedVideos     []GeneratedVideo
 	RawJSON             string
 	Debug               *UpstreamDebugSnapshot `json:"-"`
+
+	chatTextBuffer string
 }
 
 // GeneratedImage 表示图片生成/编辑接口返回的一张图片。
@@ -558,6 +653,14 @@ type GeneratedImage struct {
 	B64JSON       string
 	MIMEType      string
 	RevisedPrompt string
+}
+
+// GeneratedVideo 表示视频生成接口返回的一个视频结果。
+type GeneratedVideo struct {
+	URL      string
+	B64JSON  string
+	MIMEType string
+	FileName string
 }
 
 // ReasoningDelta 定义流式 reasoning 增量。
@@ -579,7 +682,7 @@ type GenerateStreamEvent struct {
 	ServerToolCall        *ToolCall
 	ResponseID            string
 	GeneratedImage        *GeneratedImage
-	GeneratedImageIndex   int
+	GeneratedImageIndex   int64
 	GeneratedImagePartial bool
 }
 
@@ -648,6 +751,8 @@ func NewClientWithEnv(env string, ssrfProtectionEnabled bool) *Client {
 	}
 	client.adapters = map[string]transportAdapter{
 		AdapterOpenAIResponses:        &openAIResponsesAdapter{client: client},
+		AdapterOpenRouterChat:         &openRouterChatCompletionsAdapter{client: client},
+		AdapterOpenRouterResponses:    &openRouterResponsesAdapter{client: client},
 		AdapterOpenAIChatCompletions:  &openAIChatCompletionsAdapter{client: client},
 		AdapterOpenAIImageGenerations: &openAIImageGenerationsAdapter{client: client},
 		AdapterOpenAIImageEdits:       &openAIImageEditsAdapter{client: client},
@@ -657,6 +762,7 @@ func NewClientWithEnv(env string, ssrfProtectionEnabled bool) *Client {
 		AdapterAnthropicMessages:      &anthropicMessagesAdapter{client: client},
 		AdapterGoogleGenerateContent:  &geminiGenerateContentAdapter{client: client},
 		AdapterGoogleImageGeneration:  &geminiImageGenerationAdapter{client: client},
+		AdapterGeminiInteractions:     &geminiInteractionsAdapter{client: client},
 	}
 	return client
 }
@@ -1194,6 +1300,9 @@ func mergeToolCall(existing ToolCall, incoming ToolCall) ToolCall {
 	if value := strings.TrimSpace(incoming.ArgumentsJSON); value != "" {
 		merged.ArgumentsJSON = value
 	}
+	if value := strings.TrimSpace(incoming.ThoughtSignature); value != "" {
+		merged.ThoughtSignature = value
+	}
 	if value := strings.TrimSpace(incoming.OutputJSON); value != "" {
 		merged.OutputJSON = value
 	}
@@ -1260,8 +1369,8 @@ func updateToolCallInput(items *[]ToolCall, itemID string, input string, done bo
 }
 
 func appendUniqueStrings(items []string, values ...string) []string {
-	seen := make(map[string]struct{}, len(items)+len(values))
-	result := make([]string, 0, len(items)+len(values))
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
 	for _, item := range items {
 		value := strings.TrimSpace(item)
 		if value == "" {
@@ -1397,6 +1506,8 @@ func normalizeEndpoint(raw string) string {
 		return EndpointImageGenerations
 	case EndpointImageEdits:
 		return EndpointImageEdits
+	case EndpointInteractions:
+		return EndpointInteractions
 	default:
 		return EndpointResponses
 	}

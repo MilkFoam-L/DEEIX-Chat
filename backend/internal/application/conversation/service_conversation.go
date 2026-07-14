@@ -9,11 +9,14 @@ import (
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 const (
 	defaultPageSize             = 20
 	maxPageSize                 = 100
+	maxAdminEventPageSize       = 1000
+	maxMessagePageSize          = 1000
 	conversationExportVersion   = 1
 	conversationExportScopeFull = "full"
 )
@@ -34,7 +37,7 @@ type DeleteConversationResult struct {
 func (s *Service) CreateConversation(ctx context.Context, userID uint, title string, modelName string, projectPublicID string) (*model.Conversation, error) {
 	normalizedTitle := strings.TrimSpace(title)
 	if normalizedTitle == "" {
-		normalizedTitle = "新会话"
+		normalizedTitle = "新对话"
 	}
 
 	normalizedModel := strings.TrimSpace(modelName)
@@ -88,9 +91,10 @@ func (s *Service) ListConversations(
 	starredFilter string,
 	shareFilter string,
 	projectFilter string,
+	searchQuery string,
 ) ([]model.Conversation, int64, error) {
 	offset, limit := normalizePage(page, pageSize)
-	return s.repo.ListConversationsByUser(ctx, userID, offset, limit, statusFilter, starredFilter, shareFilter, normalizeConversationProjectFilter(projectFilter))
+	return s.repo.ListConversationsByUser(ctx, userID, offset, limit, statusFilter, starredFilter, shareFilter, normalizeConversationProjectFilter(projectFilter), searchQuery)
 }
 
 // ListMessages 查询会话消息（分页）。
@@ -99,8 +103,31 @@ func (s *Service) ListMessages(ctx context.Context, userID uint, conversationID 
 		return nil, 0, ErrConversationNotFound
 	}
 
-	offset, limit := normalizePage(page, pageSize)
+	offset, limit := normalizeMessagePage(page, pageSize)
 	items, total, err := s.repo.ListMessages(ctx, conversationID, offset, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err = s.hydrateMessageFeedback(ctx, userID, items); err != nil {
+		return nil, 0, err
+	}
+	if err = s.hydrateMessageProcessTraces(ctx, items); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
+// ListMessagesBeforeID 查询指定消息 ID 之前的一页会话消息。
+func (s *Service) ListMessagesBeforeID(ctx context.Context, userID uint, conversationID uint, beforeID uint, pageSize int) ([]model.Message, int64, error) {
+	if beforeID == 0 {
+		return []model.Message{}, 0, nil
+	}
+	if _, err := s.repo.GetConversationByUser(ctx, conversationID, userID); err != nil {
+		return nil, 0, ErrConversationNotFound
+	}
+
+	_, limit := normalizeMessagePage(1, pageSize)
+	items, total, err := s.repo.ListMessagesBeforeID(ctx, conversationID, beforeID, limit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -149,6 +176,57 @@ func (s *Service) ExportConversation(ctx context.Context, userID uint, publicID 
 	}, nil
 }
 
+// ListAllConversationsAfterID 按主键游标分页列出会话（管理员导出用）。
+func (s *Service) ListAllConversationsAfterID(ctx context.Context, afterID uint, limit int) ([]model.Conversation, error) {
+	return s.repo.ListAllConversationsAfterID(ctx, afterID, limit)
+}
+
+// ListUserConversationsAfterID 按主键游标分页列出指定用户的会话。
+func (s *Service) ListUserConversationsAfterID(ctx context.Context, userID uint, afterID uint, limit int) ([]model.Conversation, error) {
+	return s.repo.ListUserConversationsAfterID(ctx, userID, afterID, limit)
+}
+
+// ExportUserConversationData 导出单会话完整数据，校验用户归属。
+func (s *Service) ExportUserConversationData(ctx context.Context, userID uint, conversation *model.Conversation) (*ConversationExportResult, error) {
+	if conversation.UserID != userID {
+		return nil, ErrConversationNotFound
+	}
+	return s.ExportConversationData(ctx, conversation)
+}
+
+// ExportConversationData 导出单会话完整数据，不做用户归属校验（管理员用）。
+func (s *Service) ExportConversationData(ctx context.Context, conversation *model.Conversation) (*ConversationExportResult, error) {
+	items, err := s.repo.ListAllMessages(ctx, conversation.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	var runs []model.Run
+	runIDs := collectExportMessageRunIDs(items)
+	if len(runIDs) > 0 && conversation.UserID > 0 {
+		var runsErr error
+		runs, runsErr = s.repo.ListConversationRunsByRunIDs(ctx, conversation.UserID, conversation.ID, runIDs)
+		if runsErr != nil && s.logger != nil {
+			s.logger.Warn("export_conversation_runs_failed", zap.Uint("conversation_id", conversation.ID), zap.Error(runsErr))
+		}
+	}
+	if runs == nil {
+		runs = []model.Run{}
+	}
+
+	return &ConversationExportResult{
+		Version:                 conversationExportVersion,
+		ExportScope:             conversationExportScopeFull,
+		ExportedAt:              time.Now().UTC(),
+		Conversation:            conversation,
+		Messages:                items,
+		Runs:                    runs,
+		TotalMessages:           int64(len(items)),
+		TotalRuns:               int64(len(runs)),
+		DefaultMessagePublicIDs: exportDefaultMessagePublicIDs(items),
+	}, nil
+}
+
 func exportDefaultMessagePublicIDs(items []model.Message) []string {
 	return publicIDsFromMessages(buildLatestVisibleMessages(items))
 }
@@ -176,7 +254,7 @@ func (s *Service) ListRecentMessages(ctx context.Context, userID uint, conversat
 		return nil, 0, ErrConversationNotFound
 	}
 
-	_, normalizedLimit := normalizePage(1, limit)
+	normalizedLimit := normalizeRecentMessageLimit(limit)
 	items, total, err := s.repo.ListRecentMessages(ctx, conversationID, normalizedLimit)
 	if err != nil {
 		return nil, 0, err
@@ -383,6 +461,44 @@ func (s *Service) ListConversationRuns(
 	return s.repo.ListConversationRuns(ctx, userID, conversationID, offset, limit)
 }
 
+// GetConversationSystemDefaultModel 返回后台配置的新会话系统推荐模型。
+func (s *Service) GetConversationSystemDefaultModel() string {
+	if s == nil || s.cfg == nil {
+		return ""
+	}
+	cfg := s.cfg.Snapshot()
+	return strings.TrimSpace(cfg.ConversationDefaultModel)
+}
+
+// EventLogListFilter 描述管理员对话事件筛选和排序条件。
+type EventLogListFilter struct {
+	Query          string
+	EventScope     string
+	EventType      string
+	Status         string
+	UserID         uint
+	ConversationID uint
+	CreatedFrom    *time.Time
+	CreatedTo      *time.Time
+	Sort           string
+}
+
+// ListConversationEventLogs 分页查询管理员对话事件。
+func (s *Service) ListConversationEventLogs(ctx context.Context, page int, pageSize int, filter EventLogListFilter) ([]model.EventLog, int64, error) {
+	offset, limit := normalizePageWithMax(page, pageSize, maxAdminEventPageSize)
+	return s.repo.ListConversationEventLogs(ctx, repository.ConversationEventLogListFilter{
+		Query:          filter.Query,
+		EventScope:     filter.EventScope,
+		EventType:      filter.EventType,
+		Status:         filter.Status,
+		UserID:         filter.UserID,
+		ConversationID: filter.ConversationID,
+		CreatedFrom:    filter.CreatedFrom,
+		CreatedTo:      filter.CreatedTo,
+		Sort:           filter.Sort,
+	}, offset, limit)
+}
+
 // ListConversationRunsByRunIDs 批量查询消息对应的运行快照。
 func (s *Service) ListConversationRunsByRunIDs(
 	ctx context.Context,
@@ -400,14 +516,27 @@ func (s *Service) ListConversationRunsByRunIDs(
 }
 
 func normalizePage(page int, pageSize int) (int, int) {
+	return normalizePageWithMax(page, pageSize, maxPageSize)
+}
+
+func normalizeMessagePage(page int, pageSize int) (int, int) {
+	return normalizePageWithMax(page, pageSize, maxMessagePageSize)
+}
+
+func normalizeRecentMessageLimit(limit int) int {
+	_, normalizedLimit := normalizeMessagePage(1, limit)
+	return normalizedLimit
+}
+
+func normalizePageWithMax(page int, pageSize int, maxAllowedPageSize int) (int, int) {
 	if page <= 0 {
 		page = 1
 	}
 	if pageSize <= 0 {
 		pageSize = defaultPageSize
 	}
-	if pageSize > maxPageSize {
-		pageSize = maxPageSize
+	if maxAllowedPageSize > 0 && pageSize > maxAllowedPageSize {
+		pageSize = maxAllowedPageSize
 	}
 	offset := (page - 1) * pageSize
 	if offset < 0 {

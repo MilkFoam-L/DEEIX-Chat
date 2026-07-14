@@ -22,11 +22,6 @@
     }
   },
   "fields": {
-    "loginPageTitle": {
-      "label": "标签页标题",
-      "description": "显示在浏览器标签页中的标题。",
-      "placeholder": "Sign in to DEEIX Chat"
-    },
     "loginDefaultNextPath": {
       "label": "默认跳转路径",
       "description": "访问 /login 且没有 next 参数时，登录成功后的默认跳转路径。"
@@ -42,6 +37,10 @@
     "emailRegistrationEnabled": {
       "label": "邮箱注册",
       "description": "允许用户通过邮箱创建账号。"
+    },
+    "passwordResetEnabled": {
+      "label": "重置密码",
+      "description": "允许用户登录页重置密码（需开启邮箱验证）。"
     },
     "usernameLoginEnabled": {
       "label": "用户名登录",

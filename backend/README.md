@@ -7,8 +7,8 @@ DEEIX Chat 后端是 Go API 服务，负责认证、用户、对话、模型渠�
 - Go 1.26
 - Gin
 - Gorm
-- PostgreSQL + pgvector
-- Redis
+- PostgreSQL + pgvector 或 SQLite + sqlite-vec
+- Redis 或进程内 memory cache
 - Swagger (`swag`)
 - S3 兼容对象存储（可选）
 - OpenTelemetry Trace（可选）
@@ -71,14 +71,15 @@ cp config.docker.example.yaml config.yaml
 - `HTTP_PORT`：HTTP 端口
 - `JWT_SECRET`：JWT 签名密钥
 - `POSTGRES_DSN`：PostgreSQL DSN
-- `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`：Redis 连接配置
+- `REDIS_ADDR` / `REDIS_USERNAME` / `REDIS_PASSWORD` / `REDIS_DB` / `REDIS_TLS_ENABLED` / `REDIS_TLS_INSECURE_SKIP_VERIFY`：Redis 连接配置；`REDIS_TLS_INSECURE_SKIP_VERIFY` 会跳过证书校验，除非非标准 TLS 端点要求，否则保持关闭
 - `STORAGE_BACKEND`：`local` 或 `s3`
 - `GEOIP_PROVIDER`：`ipwhois`、`ipinfo`、`mmdb` 或 `none`
 - `GEOIP_DATABASE_URL` / `GEOIP_DATABASE_PATH`：MMDB 数据库下载地址与本地缓存路径
 - `OTEL_ENABLED`：是否启用 OpenTelemetry Trace；未设置时，配置了 OTLP Endpoint 会自动启用
-- `OTEL_EXPORTER_OTLP_ENDPOINT`：OTLP gRPC Collector 地址
+- `OTEL_EXPORTER_OTLP_ENDPOINT`：OTLP Collector 地址
 - `OTEL_EXPORTER_OTLP_HEADERS`：OTLP 请求头，格式为 `key=value,key2=value2`
-- `OTEL_EXPORTER_OTLP_INSECURE`：是否使用明文 gRPC 连接
+- `OTEL_EXPORTER_OTLP_INSECURE`：是否使用明文传输
+- `OTEL_EXPORTER_OTLP_PROTOCOL`：OTLP exporter 协议，支持 `grpc`、`http`、`http/protobuf`，默认 `grpc`
 - `OTEL_TRACES_SAMPLER_ARG` / `OTEL_SAMPLING_RATE`：Trace 采样率，范围 `0~1`
 
 对应 YAML：
@@ -92,6 +93,7 @@ observability:
     endpoint: "http://127.0.0.1:4317"
     headers: ""
     insecure: true
+    protocol: grpc
     sampling_rate: 1
 ```
 
@@ -213,6 +215,8 @@ geoip:
 - 文本类文件：小文件可全文注入；超出阈值时按配置走 RAG 或回退策略。
 - PDF/Office 等文档：通过内置提取、Tika、Docling、MinerU 或 OCR 引擎提取文本；PDF OCR 回退可单独控制。
 
+MinerU 可在设置中选择处理的文件类型；云端 MinerU 支持 `.doc/.docx/.ppt/.pptx/.xls/.xlsx`，自部署 MinerU 支持 `.docx/.pptx/.xlsx`。
+
 OCR 引擎配置由后台文件设置管理，当前支持 RapidOCR、Tesseract OCR、Paddle OCR、腾讯云 OCR、阿里云 OCR 与 LLM OCR。服务地址、鉴权密钥和超时时间按具体引擎配置。
 
 用户文件存储配额由运行时设置 `storage:user_storage_quota_bytes` 管理，单位为字节。值为 `0` 表示不限制；非零时，上传、分享克隆和文件复用链路都会按用户维度校验并同步最新配额。前端 `/files` 页支持单个删除和批量删除，后端会在删除后释放对应配额。
@@ -222,6 +226,7 @@ OCR 引擎配置由后台文件设置管理，当前支持 RapidOCR、Tesseract 
 模型能力 JSON 支持：
 
 - `defaultOptions`：写入用户侧默认参数 JSON，并作为请求参数来源。
+- `lockedOptionPaths`：声明不可由用户覆盖的参数路径；对应值仍从 `defaultOptions` 读取，后端发送前会恢复为管理员默认值。
 - `optionControls`：定义用户参数配置对话框的可视化控件，不会单独传给上游。
 - `nativeToolKeys`：定义当前模型允许的厂商官方原生工具，例如 OpenAI、xAI、Google 和 Anthropic 的原生搜索、代码执行或图片生成能力。
 - `image.stream`：仅对图像类模型能力生效；未配置时保持默认流式，显式写 `false` 时关闭图像流式调用。

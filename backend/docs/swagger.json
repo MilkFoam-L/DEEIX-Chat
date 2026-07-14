@@ -4,7 +4,7 @@
         "description": "DEEIX Chat 后端 API 文档",
         "title": "DEEIX Chat API",
         "contact": {},
-        "version": "0.2.0"
+        "version": "0.3.2"
     },
     "basePath": "/api/v1",
     "paths": {
@@ -629,6 +629,12 @@
                             "$ref": "#/definitions/internal_transport_http_billing.ErrorDoc"
                         }
                     },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_billing.ErrorDoc"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -1066,6 +1072,145 @@
                 }
             }
         },
+        "/admin/conversation-events": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "管理员分页查看对话运行轨迹、工具、MCP 与处理事件",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员查询对话事件",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "搜索运行ID、事件、阶段、标题、工具名",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "事件范围(trace_block/trace_event/tool_call)",
+                        "name": "event_scope",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "事件类型",
+                        "name": "event_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "事件状态",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "用户ID",
+                        "name": "user_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "会话ID",
+                        "name": "conversation_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "创建时间起点(RFC3339)",
+                        "name": "created_from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "创建时间终点(RFC3339)",
+                        "name": "created_to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序方式",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ConversationEventListResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/conversations/export": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "流式导出全量会话及消息为 NDJSON 文件，最后一行为 export_manifest 元数据",
+                "produces": [
+                    "application/x-ndjson"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员导出全量对话数据",
+                "responses": {
+                    "200": {
+                        "description": "NDJSON stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/llm/models": {
             "get": {
                 "security": [
@@ -1104,6 +1249,12 @@
                         "in": "query"
                     },
                     {
+                        "type": "boolean",
+                        "description": "仅查询公开且可路由模型",
+                        "name": "only_available",
+                        "in": "query"
+                    },
+                    {
                         "type": "string",
                         "description": "搜索关键词",
                         "name": "q",
@@ -1125,6 +1276,12 @@
                         "type": "string",
                         "description": "接口协议",
                         "name": "protocol",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "上游 ID",
+                        "name": "upstream",
                         "in": "query"
                     },
                     {
@@ -1478,6 +1635,74 @@
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_channel.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_channel.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "管理员将当前平台模型绑定到一个已存在的上游模型",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "llm"
+                ],
+                "summary": "管理员绑定模型上游来源",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "模型ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "来源绑定参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_channel.BindModelUpstreamSourceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_channel.ModelUpstreamSourceDataResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_channel.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_channel.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_transport_http_channel.ErrorDoc"
                         }
@@ -2971,6 +3196,962 @@
                 }
             }
         },
+        "/admin/logs/cleanup": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "按日志类型物理删除指定时间点之前的日志；操作不可恢复",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员清理日志",
+                "parameters": [
+                    {
+                        "description": "日志清理参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.CleanupLogsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.CleanupLogsResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/models/{modelID}/permission-groups": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回平台模型的手动权限组与动态规则命中的有效权限组",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员列出模型权限组",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "平台模型ID",
+                        "name": "modelID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ModelPermissionGroupsResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "全量替换平台模型的手动权限组，不影响权限组动态规则",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员设置模型手动权限组",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "平台模型ID",
+                        "name": "modelID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "权限组 ID 集合",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.SetModelPermissionGroupsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ModelPermissionGroupsResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/payment-orders": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "管理员分页查看订阅和充值支付单",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员查询支付订单记录",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "搜索订单号、支付渠道、外部支付ID",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "订单类型(subscription/topup)",
+                        "name": "order_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "支付渠道",
+                        "name": "provider",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "支付状态",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "用户ID",
+                        "name": "user_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "创建时间起点(RFC3339)",
+                        "name": "created_from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "创建时间终点(RFC3339)",
+                        "name": "created_to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序方式",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.PaymentOrderListResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/permission-groups": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回全部模型访问权限组，默认组优先",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员列出权限组",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupListResponseDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "创建模型访问权限组并设置计费倍率",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员创建权限组",
+                "parameters": [
+                    {
+                        "description": "权限组参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.CreatePermissionGroupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupDataResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/permission-groups/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "删除权限组及其模型、用户关联；默认组和被套餐引用的权限组不可删除",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员删除权限组",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "权限组ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.DeletePermissionGroupResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "更新权限组名称、说明与计费倍率",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员更新权限组",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "权限组ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "权限组参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.UpdatePermissionGroupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupDataResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/permission-groups/{id}/models": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回权限组授权的平台模型 ID 集合",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员列出权限组模型",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "权限组ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.GroupModelsResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "全量替换权限组授权的平台模型 ID 集合与动态访问规则",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员设置权限组模型",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "权限组ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "平台模型 ID 集合",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.SetGroupModelsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.GroupModelsResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/permission-groups/{id}/users": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回权限组内的用户 ID 集合",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员列出权限组用户",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "权限组ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.GroupUsersResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "全量替换权限组内的用户 ID 集合",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员设置权限组用户",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "权限组ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "用户 ID 集合",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.SetGroupUsersRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.GroupUsersResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/prompt-presets": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-prompt-presets"
+                ],
+                "summary": "管理员查询内置提示词",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "搜索关键词",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "是否启用",
+                        "name": "enabled",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetPageResponseDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-prompt-presets"
+                ],
+                "summary": "管理员创建内置提示词",
+                "parameters": [
+                    {
+                        "description": "提示词配置",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.WritePromptPresetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/prompt-presets/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-prompt-presets"
+                ],
+                "summary": "管理员删除内置提示词",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "提示词ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetDeleteResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-prompt-presets"
+                ],
+                "summary": "管理员更新内置提示词",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "提示词ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新字段",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PatchPromptPresetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/settings": {
             "get": {
                 "security": [
@@ -3403,6 +4584,240 @@
                 }
             }
         },
+        "/admin/skills": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-skills"
+                ],
+                "summary": "管理员查询内置技能",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "搜索关键词",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "是否启用",
+                        "name": "enabled",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillPageResponseDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-skills"
+                ],
+                "summary": "管理员创建内置技能",
+                "parameters": [
+                    {
+                        "description": "技能配置",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.WriteSkillRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/skills/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-skills"
+                ],
+                "summary": "管理员删除内置技能",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "技能ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillDeleteResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-skills"
+                ],
+                "summary": "管理员更新内置技能",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "技能ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新字段",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.PatchSkillRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/system-events": {
             "get": {
                 "security": [
@@ -3601,6 +5016,24 @@
                         "description": "每页数量",
                         "name": "page_size",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "搜索用户名、昵称、邮箱或公开ID",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "订阅状态过滤(active/free)",
+                        "name": "subscription_status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "身份源 slug 过滤",
+                        "name": "identity_provider",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3661,6 +5094,63 @@
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/users/import/openwebui": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "从 OpenWebUI SQLite 或 PostgreSQL 数据库读取用户，按 email 去重导入；已存在用户不会修改",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员导入 OpenWebUI 用户",
+                "parameters": [
+                    {
+                        "description": "OpenWebUI 导入参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ImportOpenWebUIUsersRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ImportOpenWebUIUsersResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/internal_transport_http_admin.ErrorDoc"
                         }
@@ -4016,6 +5506,14 @@
                     "announcements"
                 ],
                 "summary": "获取当前公告",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "是否包含今日不再显示的公告",
+                        "name": "include_dismissed",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -4311,6 +5809,98 @@
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_auth.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/password/reset/complete": {
+            "post": {
+                "description": "使用邮箱、验证码和新密码完成密码重置；失败时返回通用错误，避免暴露账号状态",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "完成密码重置",
+                "parameters": [
+                    {
+                        "description": "密码重置完成请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_auth.PasswordResetCompleteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_auth.PasswordResetCompleteResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_auth.ErrorDoc"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_auth.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/password/reset/start": {
+            "post": {
+                "description": "SMTP 配置可用时，向已验证邮箱发送密码重置验证码；失败时返回通用错误，避免暴露账号状态",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "发送密码重置验证码",
+                "parameters": [
+                    {
+                        "description": "密码重置验证码请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_auth.PasswordResetStartRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_auth.PasswordResetStartResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_auth.ErrorDoc"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "$ref": "#/definitions/internal_transport_http_auth.ErrorDoc"
                         }
@@ -5500,6 +7090,12 @@
                         "description": "项目筛选: all|unassigned|项目 public_id",
                         "name": "project",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "搜索关键词，匹配会话元数据、项目名称和消息正文",
+                        "name": "q",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -5556,6 +7152,40 @@
                         "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/internal_transport_http_conversation.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/conversations/default-model-candidate": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回后台配置的新会话系统推荐模型；未配置时返回空候选",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "查询新会话默认模型候选",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.ConversationDefaultModelCandidateResponseDoc"
                         }
                     },
                     "500": {
@@ -6598,6 +8228,61 @@
                 }
             }
         },
+        "/conversations/{id}/title/regenerate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据指定会话已有内容重新生成标题",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "自动重新命名会话",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "会话 public_id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.ConversationUpdateResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/files": {
             "get": {
                 "security": [
@@ -7345,6 +9030,70 @@
                 }
             }
         },
+        "/messages/{id}": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "更新当前用户会话中的 assistant 消息内容，并标记为已编辑",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "更新消息内容",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "消息 public_id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "消息内容",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.UpdateMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.MessageResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_conversation.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/messages/{id}/feedback": {
             "put": {
                 "security": [
@@ -7438,6 +9187,319 @@
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/internal_transport_http_channel.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/prompt-presets": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回管理员内置和当前用户自定义的已启用提示词，用于 slash 选择器",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "prompt-presets"
+                ],
+                "summary": "查询当前用户可用预制提示词",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "搜索关键词",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetPageResponseDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/prompt-presets/mine": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "分页查询当前用户自定义提示词",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "prompt-presets"
+                ],
+                "summary": "查询我的自定义提示词",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "搜索关键词",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "是否启用",
+                        "name": "enabled",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetPageResponseDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "prompt-presets"
+                ],
+                "summary": "创建我的自定义提示词",
+                "parameters": [
+                    {
+                        "description": "提示词配置",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.WritePromptPresetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/prompt-presets/mine/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "prompt-presets"
+                ],
+                "summary": "删除我的自定义提示词",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "提示词ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetDeleteResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "prompt-presets"
+                ],
+                "summary": "更新我的自定义提示词",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "提示词ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新字段",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PatchPromptPresetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_promptpreset.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/chat-context-policy": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "settings"
+                ],
+                "summary": "查询聊天上下文策略",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_DEEIX-AI_DEEIX-Chat_backend_internal_shared_response.Envelope"
                         }
                     }
                 }
@@ -7670,6 +9732,349 @@
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/internal_transport_http_conversation.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/skills": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回管理员内置和当前用户自定义的已启用技能摘要，用于会话按需选择 Skill 上下文",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "skills"
+                ],
+                "summary": "查询当前用户可用技能",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "搜索关键词",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillSummaryPageResponseDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/skills/mine": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "skills"
+                ],
+                "summary": "查询我的自定义技能",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "搜索关键词",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "是否启用",
+                        "name": "enabled",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillPageResponseDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "skills"
+                ],
+                "summary": "创建我的自定义技能",
+                "parameters": [
+                    {
+                        "description": "技能配置",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.WriteSkillRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/skills/mine/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "skills"
+                ],
+                "summary": "删除我的自定义技能",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "技能ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillDeleteResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "skills"
+                ],
+                "summary": "更新我的自定义技能",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "技能ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新字段",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.PatchSkillRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/skills/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "按需返回单个可用 Skill 的完整 SKILL.md 内容，用于用户查看详情",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "skills"
+                ],
+                "summary": "查询当前用户可用技能详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "技能ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.SkillResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_transport_http_skill.ErrorDoc"
                         }
                     }
                 }
@@ -7911,6 +10316,202 @@
                 }
             }
         },
+        "internal_transport_http_admin.CleanupLogsRequest": {
+            "type": "object",
+            "required": [
+                "before",
+                "type"
+            ],
+            "properties": {
+                "before": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.CleanupLogsResponse": {
+            "type": "object",
+            "properties": {
+                "before": {
+                    "type": "string"
+                },
+                "deletedCount": {
+                    "type": "integer"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.CleanupLogsResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_admin.CleanupLogsResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.ConversationEventListResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_transport_http_admin.ConversationEventResponse"
+                            }
+                        },
+                        "total": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.ConversationEventResponse": {
+            "type": "object",
+            "properties": {
+                "contentMarkdown": {
+                    "type": "string"
+                },
+                "conversationID": {
+                    "type": "integer"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "endedAt": {
+                    "type": "string"
+                },
+                "errorJSON": {
+                    "type": "string"
+                },
+                "eventID": {
+                    "type": "string"
+                },
+                "eventScope": {
+                    "type": "string"
+                },
+                "eventType": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "inputJSON": {
+                    "type": "string"
+                },
+                "latencyMS": {
+                    "type": "integer"
+                },
+                "messageID": {
+                    "type": "integer"
+                },
+                "outputJSON": {
+                    "type": "string"
+                },
+                "parentEventID": {
+                    "type": "string"
+                },
+                "payloadJSON": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "platformModelName": {
+                    "type": "string"
+                },
+                "providerProtocol": {
+                    "type": "string"
+                },
+                "roundID": {
+                    "type": "string"
+                },
+                "routedBindingCode": {
+                    "type": "string"
+                },
+                "runID": {
+                    "type": "string"
+                },
+                "seq": {
+                    "type": "integer"
+                },
+                "stage": {
+                    "type": "string"
+                },
+                "startedAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "toolCallID": {
+                    "type": "string"
+                },
+                "toolName": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "upstreamModelName": {
+                    "type": "string"
+                },
+                "upstreamName": {
+                    "type": "string"
+                },
+                "userDisplayName": {
+                    "type": "string"
+                },
+                "userID": {
+                    "type": "integer"
+                },
+                "userLabel": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.CreatePermissionGroupRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "maxLength": 512
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 128
+                },
+                "rateMultiplierPercent": {
+                    "type": "integer",
+                    "maximum": 10000,
+                    "minimum": 0
+                }
+            }
+        },
         "internal_transport_http_admin.CreateUserRequest": {
             "type": "object",
             "required": [
@@ -7973,6 +10574,28 @@
                 }
             }
         },
+        "internal_transport_http_admin.DeletePermissionGroupResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                },
+                "summary": {
+                    "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupDeleteSummaryResponse"
+                }
+            }
+        },
+        "internal_transport_http_admin.DeletePermissionGroupResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_admin.DeletePermissionGroupResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_transport_http_admin.DeleteUserResponse": {
             "type": "object",
             "properties": {
@@ -8004,6 +10627,155 @@
                     "type": "string"
                 },
                 "requestId": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.GroupModelsResponse": {
+            "type": "object",
+            "properties": {
+                "modelIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupModelRuleResponse"
+                    }
+                }
+            }
+        },
+        "internal_transport_http_admin.GroupModelsResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_admin.GroupModelsResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.GroupUsersResponse": {
+            "type": "object",
+            "properties": {
+                "userIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "internal_transport_http_admin.GroupUsersResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_admin.GroupUsersResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.ImportOpenWebUIUsersRequest": {
+            "type": "object",
+            "required": [
+                "creditMultiplier",
+                "dsn"
+            ],
+            "properties": {
+                "creditMultiplier": {
+                    "type": "number"
+                },
+                "dryRun": {
+                    "type": "boolean"
+                },
+                "dsn": {
+                    "type": "string",
+                    "maxLength": 2048
+                }
+            }
+        },
+        "internal_transport_http_admin.ImportOpenWebUIUsersResponse": {
+            "type": "object",
+            "properties": {
+                "dedupeField": {
+                    "type": "string"
+                },
+                "dedupeRule": {
+                    "type": "string"
+                },
+                "imported": {
+                    "type": "integer"
+                },
+                "scanned": {
+                    "type": "integer"
+                },
+                "skippedDuplicateSourceEmail": {
+                    "type": "integer"
+                },
+                "skippedExistingEmail": {
+                    "type": "integer"
+                },
+                "skippedInvalidEmail": {
+                    "type": "integer"
+                },
+                "skippedInvalidRow": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.ImportOpenWebUIUsersResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_admin.ImportOpenWebUIUsersResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.ModelPermissionGroupsResponse": {
+            "type": "object",
+            "properties": {
+                "effectiveGroupIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "manualGroupIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "matchedGroupIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "unassigned": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_transport_http_admin.ModelPermissionGroupsResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_admin.ModelPermissionGroupsResponse"
+                },
+                "errorMsg": {
                     "type": "string"
                 }
             }
@@ -8061,6 +10833,243 @@
                 }
             }
         },
+        "internal_transport_http_admin.PaymentOrderListResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_transport_http_admin.PaymentOrderResponse"
+                            }
+                        },
+                        "total": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.PaymentOrderResponse": {
+            "type": "object",
+            "properties": {
+                "baseAmountCents": {
+                    "type": "integer"
+                },
+                "baseCurrency": {
+                    "type": "string"
+                },
+                "billingInterval": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "creditNanousd": {
+                    "type": "integer"
+                },
+                "creditUSD": {
+                    "type": "number"
+                },
+                "cycles": {
+                    "type": "integer"
+                },
+                "expiredAt": {
+                    "type": "string"
+                },
+                "externalCheckoutID": {
+                    "type": "string"
+                },
+                "externalPaymentID": {
+                    "type": "string"
+                },
+                "fxRate": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "orderNo": {
+                    "type": "string"
+                },
+                "orderType": {
+                    "type": "string"
+                },
+                "paidAt": {
+                    "type": "string"
+                },
+                "payAmountCents": {
+                    "type": "integer"
+                },
+                "payCurrency": {
+                    "type": "string"
+                },
+                "planID": {
+                    "type": "integer"
+                },
+                "priceID": {
+                    "type": "integer"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "snapshotJSON": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "userDisplayName": {
+                    "type": "string"
+                },
+                "userID": {
+                    "type": "integer"
+                },
+                "userLabel": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.PermissionGroupDataResponse": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupResponse"
+                }
+            }
+        },
+        "internal_transport_http_admin.PermissionGroupDataResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupDataResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.PermissionGroupDeleteSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "manualModelCount": {
+                    "type": "integer"
+                },
+                "manualUserCount": {
+                    "type": "integer"
+                },
+                "planCount": {
+                    "type": "integer"
+                },
+                "ruleCount": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_transport_http_admin.PermissionGroupListResponse": {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupResponse"
+                    }
+                }
+            }
+        },
+        "internal_transport_http_admin.PermissionGroupListResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupListResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.PermissionGroupModelRuleRequest": {
+            "type": "object",
+            "required": [
+                "type"
+            ],
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "maxLength": 32
+                },
+                "value": {
+                    "type": "string",
+                    "maxLength": 128
+                }
+            }
+        },
+        "internal_transport_http_admin.PermissionGroupModelRuleResponse": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.PermissionGroupResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "isDefault": {
+                    "type": "boolean"
+                },
+                "manualModelCount": {
+                    "type": "integer"
+                },
+                "manualUserCount": {
+                    "type": "integer"
+                },
+                "modelCount": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "rateMultiplierPercent": {
+                    "type": "integer"
+                },
+                "ruleModelCount": {
+                    "type": "integer"
+                },
+                "subscriptionUserCount": {
+                    "type": "integer"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "userCount": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_transport_http_admin.ResetUserPasswordRequest": {
             "type": "object",
             "required": [
@@ -8112,6 +11121,45 @@
                 },
                 "errorMsg": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_admin.SetGroupModelsRequest": {
+            "type": "object",
+            "properties": {
+                "modelIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_transport_http_admin.PermissionGroupModelRuleRequest"
+                    }
+                }
+            }
+        },
+        "internal_transport_http_admin.SetGroupUsersRequest": {
+            "type": "object",
+            "properties": {
+                "userIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "internal_transport_http_admin.SetModelPermissionGroupsRequest": {
+            "type": "object",
+            "properties": {
+                "groupIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
                 }
             }
         },
@@ -8178,6 +11226,27 @@
                 }
             }
         },
+        "internal_transport_http_admin.UpdatePermissionGroupRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "maxLength": 512
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 128
+                },
+                "rateMultiplierPercent": {
+                    "type": "integer",
+                    "maximum": 10000,
+                    "minimum": 0
+                }
+            }
+        },
         "internal_transport_http_admin.UpdateUserStatusRequest": {
             "type": "object",
             "required": [
@@ -8238,6 +11307,9 @@
                 },
                 "billedUSD": {
                     "type": "number"
+                },
+                "billingAt": {
+                    "type": "string"
                 },
                 "cacheReadTokens": {
                     "type": "integer"
@@ -8355,6 +11427,26 @@
                 }
             }
         },
+        "internal_transport_http_admin.UserIdentityProviderSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "logoURL": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_transport_http_admin.UserListResponseDoc": {
             "type": "object",
             "properties": {
@@ -8412,6 +11504,15 @@
                 },
                 "id": {
                     "type": "integer"
+                },
+                "identityProviders": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_transport_http_admin.UserIdentityProviderSummaryResponse"
+                    }
+                },
+                "lastActiveAt": {
+                    "type": "string"
                 },
                 "lastLoginAt": {
                     "type": "string"
@@ -9092,6 +12193,9 @@
                 "emailVerificationEnabled": {
                     "type": "boolean"
                 },
+                "passwordResetEnabled": {
+                    "type": "boolean"
+                },
                 "providers": {
                     "type": "array",
                     "items": {
@@ -9220,6 +12324,81 @@
                 }
             }
         },
+        "internal_transport_http_auth.PasswordResetCompleteRequest": {
+            "type": "object",
+            "required": [
+                "code",
+                "email",
+                "newPassword"
+            ],
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string",
+                    "maxLength": 128
+                },
+                "newPassword": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "minLength": 8
+                }
+            }
+        },
+        "internal_transport_http_auth.PasswordResetCompleteResponse": {
+            "type": "object",
+            "properties": {
+                "changed": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_transport_http_auth.PasswordResetCompleteResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_auth.PasswordResetCompleteResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_auth.PasswordResetStartRequest": {
+            "type": "object",
+            "required": [
+                "email"
+            ],
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "maxLength": 128
+                }
+            }
+        },
+        "internal_transport_http_auth.PasswordResetStartResponse": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "type": "string"
+                },
+                "sent": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_transport_http_auth.PasswordResetStartResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_auth.PasswordResetStartResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_transport_http_auth.PatchMeRequest": {
             "type": "object",
             "properties": {
@@ -9333,6 +12512,26 @@
                 }
             }
         },
+        "internal_transport_http_auth.UserIdentityProviderSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "logoURL": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_transport_http_auth.UserResponse": {
             "type": "object",
             "properties": {
@@ -9363,11 +12562,20 @@
                 "id": {
                     "type": "integer"
                 },
+                "identityProviders": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_transport_http_auth.UserIdentityProviderSummaryResponse"
+                    }
+                },
                 "initialSecurityRequired": {
                     "type": "boolean"
                 },
                 "initialUsernameRequired": {
                     "type": "boolean"
+                },
+                "lastActiveAt": {
+                    "type": "string"
                 },
                 "lastLoginAt": {
                     "type": "string"
@@ -9568,6 +12776,13 @@
                 "mode"
             ],
             "properties": {
+                "displayCurrency": {
+                    "type": "string",
+                    "enum": [
+                        "USD",
+                        "CNY"
+                    ]
+                },
                 "mode": {
                     "type": "string",
                     "enum": [
@@ -9588,12 +12803,18 @@
                 "prepaidAmountUSD": {
                     "type": "number",
                     "minimum": 0
+                },
+                "usdToCNYRate": {
+                    "type": "number"
                 }
             }
         },
         "internal_transport_http_billing.BillingConfigResponse": {
             "type": "object",
             "properties": {
+                "displayCurrency": {
+                    "type": "string"
+                },
                 "epayTypes": {
                     "type": "array",
                     "items": {
@@ -9741,6 +12962,9 @@
                 "periodCreditUSD": {
                     "type": "number"
                 },
+                "permissionGroupID": {
+                    "type": "integer"
+                },
                 "prices": {
                     "type": "array",
                     "items": {
@@ -9858,8 +13082,8 @@
         "internal_transport_http_billing.CreateCheckoutRequest": {
             "type": "object",
             "properties": {
-                "amountUSD": {
-                    "type": "number",
+                "amountMinorUnits": {
+                    "type": "integer",
                     "minimum": 0
                 },
                 "cancelURL": {
@@ -10096,6 +13320,12 @@
                 "billable": {
                     "type": "boolean"
                 },
+                "description": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
                 "priceLabel": {
                     "type": "string"
                 },
@@ -10106,6 +13336,9 @@
                     "type": "string"
                 },
                 "toolKey": {
+                    "type": "string"
+                },
+                "type": {
                     "type": "string"
                 },
                 "unit": {
@@ -10556,6 +13789,9 @@
                 "periodCreditUSD": {
                     "type": "number",
                     "minimum": 0
+                },
+                "permissionGroupID": {
+                    "type": "integer"
                 }
             }
         },
@@ -10756,6 +13992,9 @@
                 },
                 "billedUSD": {
                     "type": "number"
+                },
+                "billingAt": {
+                    "type": "string"
                 },
                 "cacheReadTokens": {
                     "type": "integer"
@@ -10958,6 +14197,50 @@
                 }
             }
         },
+        "internal_transport_http_channel.BindModelUpstreamSourceRequest": {
+            "type": "object",
+            "required": [
+                "upstreamID",
+                "upstreamModelID"
+            ],
+            "properties": {
+                "cbDurationMin": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cbFailureThreshold": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cbWindowMin": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "priority": {
+                    "type": "integer"
+                },
+                "protocol": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "active",
+                        "inactive"
+                    ]
+                },
+                "upstreamID": {
+                    "type": "integer"
+                },
+                "upstreamModelID": {
+                    "type": "integer"
+                },
+                "weight": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_transport_http_channel.CircuitResetResponse": {
             "type": "object",
             "properties": {
@@ -10972,9 +14255,35 @@
                 "platformModelName"
             ],
             "properties": {
+                "accessScope": {
+                    "type": "string",
+                    "enum": [
+                        "public",
+                        "internal"
+                    ]
+                },
                 "capabilitiesJSON": {
                     "type": "string",
                     "maxLength": 10000
+                },
+                "cbDurationMin": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cbFailureThreshold": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cbPolicyMode": {
+                    "type": "string",
+                    "enum": [
+                        "default",
+                        "enforced"
+                    ]
+                },
+                "cbWindowMin": {
+                    "type": "integer",
+                    "minimum": 0
                 },
                 "description": {
                     "type": "string",
@@ -11219,6 +14528,12 @@
                     "items": {
                         "$ref": "#/definitions/internal_transport_http_channel.ImportUpstreamModelItemRequest"
                     }
+                },
+                "permissionGroupIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
                 }
             }
         },
@@ -11457,11 +14772,26 @@
         "internal_transport_http_channel.ModelResponse": {
             "type": "object",
             "properties": {
+                "accessScope": {
+                    "type": "string"
+                },
                 "activeSourceCount": {
                     "type": "integer"
                 },
                 "capabilitiesJSON": {
                     "type": "string"
+                },
+                "cbDurationMin": {
+                    "type": "integer"
+                },
+                "cbFailureThreshold": {
+                    "type": "integer"
+                },
+                "cbPolicyMode": {
+                    "type": "string"
+                },
+                "cbWindowMin": {
+                    "type": "integer"
                 },
                 "createdAt": {
                     "type": "string"
@@ -11497,6 +14827,9 @@
                     "type": "string"
                 },
                 "updatedAt": {
+                    "type": "string"
+                },
+                "upstreamNamesJSON": {
                     "type": "string"
                 },
                 "vendor": {
@@ -11543,8 +14876,20 @@
                 "bindingCode": {
                     "type": "string"
                 },
+                "cbDurationMin": {
+                    "type": "integer"
+                },
+                "cbFailureThreshold": {
+                    "type": "integer"
+                },
+                "cbWindowMin": {
+                    "type": "integer"
+                },
                 "circuitOpen": {
                     "type": "boolean"
+                },
+                "circuitScope": {
+                    "type": "string"
                 },
                 "circuitUntil": {
                     "type": "string"
@@ -11595,6 +14940,9 @@
                     "type": "string"
                 },
                 "upstreamName": {
+                    "type": "string"
+                },
+                "upstreamStatus": {
                     "type": "string"
                 },
                 "weight": {
@@ -11775,9 +15123,35 @@
         "internal_transport_http_channel.UpdateModelRequest": {
             "type": "object",
             "properties": {
+                "accessScope": {
+                    "type": "string",
+                    "enum": [
+                        "public",
+                        "internal"
+                    ]
+                },
                 "capabilitiesJSON": {
                     "type": "string",
                     "maxLength": 10000
+                },
+                "cbDurationMin": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cbFailureThreshold": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cbPolicyMode": {
+                    "type": "string",
+                    "enum": [
+                        "default",
+                        "enforced"
+                    ]
+                },
+                "cbWindowMin": {
+                    "type": "integer",
+                    "minimum": 0
                 },
                 "description": {
                     "type": "string",
@@ -11827,6 +15201,18 @@
         "internal_transport_http_channel.UpdateModelUpstreamSourceRequest": {
             "type": "object",
             "properties": {
+                "cbDurationMin": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cbFailureThreshold": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "cbWindowMin": {
+                    "type": "integer",
+                    "minimum": 0
+                },
                 "priority": {
                     "type": "integer"
                 },
@@ -12462,6 +15848,31 @@
                 }
             }
         },
+        "internal_transport_http_conversation.ConversationDefaultModelCandidateResponse": {
+            "type": "object",
+            "properties": {
+                "platformModelName": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "usedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_conversation.ConversationDefaultModelCandidateResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_conversation.ConversationDefaultModelCandidateResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_transport_http_conversation.ConversationDeleteResponse": {
             "type": "object",
             "properties": {
@@ -12880,22 +16291,28 @@
                 }
             }
         },
+        "internal_transport_http_conversation.FileListResponse": {
+            "type": "object",
+            "properties": {
+                "quota": {
+                    "$ref": "#/definitions/internal_transport_http_conversation.StorageQuotaResponse"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_transport_http_conversation.FileObjectResponse"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_transport_http_conversation.FileListResponseDoc": {
             "type": "object",
             "properties": {
                 "data": {
-                    "type": "object",
-                    "properties": {
-                        "results": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/internal_transport_http_conversation.FileObjectResponse"
-                            }
-                        },
-                        "total": {
-                            "type": "integer"
-                        }
-                    }
+                    "$ref": "#/definitions/internal_transport_http_conversation.FileListResponse"
                 },
                 "errorMsg": {
                     "type": "string"
@@ -13214,6 +16631,9 @@
                 "createdAt": {
                     "type": "string"
                 },
+                "editedAt": {
+                    "type": "string"
+                },
                 "errorCode": {
                     "type": "string"
                 },
@@ -13291,6 +16711,17 @@
                 },
                 "userID": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_transport_http_conversation.MessageResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_conversation.MessageResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
                 }
             }
         },
@@ -13441,6 +16872,9 @@
                     "type": "string"
                 },
                 "createdAt": {
+                    "type": "string"
+                },
+                "editedAt": {
                     "type": "string"
                 },
                 "errorCode": {
@@ -13681,8 +17115,7 @@
                     "maxLength": 64
                 },
                 "content": {
-                    "type": "string",
-                    "maxLength": 20000
+                    "type": "string"
                 },
                 "contentType": {
                     "type": "string",
@@ -13700,6 +17133,13 @@
                     "items": {
                         "type": "string"
                     }
+                },
+                "htmlVisualColorMode": {
+                    "type": "string",
+                    "enum": [
+                        "light",
+                        "dark"
+                    ]
                 },
                 "htmlVisualPrompt": {
                     "type": "boolean"
@@ -13723,6 +17163,13 @@
                         "type": "integer"
                     }
                 },
+                "skillIDs": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "sourceMessagePublicID": {
                     "type": "string",
                     "maxLength": 32
@@ -13734,6 +17181,9 @@
             "properties": {
                 "assistantMessage": {
                     "$ref": "#/definitions/internal_transport_http_conversation.MessageResponse"
+                },
+                "metadataRefreshHint": {
+                    "type": "string"
                 },
                 "userMessage": {
                     "$ref": "#/definitions/internal_transport_http_conversation.MessageResponse"
@@ -13857,6 +17307,17 @@
                 }
             }
         },
+        "internal_transport_http_conversation.UpdateMessageRequest": {
+            "type": "object",
+            "required": [
+                "content"
+            ],
+            "properties": {
+                "content": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_transport_http_conversation.UploadFileResponseDoc": {
             "type": "object",
             "properties": {
@@ -13972,6 +17433,174 @@
                 }
             }
         },
+        "internal_transport_http_promptpreset.ErrorDoc": {
+            "type": "object",
+            "properties": {
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_promptpreset.PatchPromptPresetRequest": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "maxLength": 10000
+                },
+                "description": {
+                    "type": "string",
+                    "maxLength": 256
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "sortOrder": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "trigger": {
+                    "type": "string",
+                    "maxLength": 64
+                }
+            }
+        },
+        "internal_transport_http_promptpreset.PromptPresetDataResponse": {
+            "type": "object",
+            "properties": {
+                "promptPreset": {
+                    "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetResponse"
+                }
+            }
+        },
+        "internal_transport_http_promptpreset.PromptPresetDeleteDataResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_transport_http_promptpreset.PromptPresetDeleteResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetDeleteDataResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_promptpreset.PromptPresetPageResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetResponse"
+                            }
+                        },
+                        "total": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_promptpreset.PromptPresetResponse": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdByUserID": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "sortOrder": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "trigger": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "updatedByUserID": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_transport_http_promptpreset.PromptPresetResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_promptpreset.PromptPresetDataResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_promptpreset.WritePromptPresetRequest": {
+            "type": "object",
+            "required": [
+                "content",
+                "title",
+                "trigger"
+            ],
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "maxLength": 10000
+                },
+                "description": {
+                    "type": "string",
+                    "maxLength": 256
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "sortOrder": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "trigger": {
+                    "type": "string",
+                    "maxLength": 64
+                }
+            }
+        },
         "internal_transport_http_settings.PatchItem": {
             "type": "object",
             "required": [
@@ -14005,6 +17634,228 @@
                     "items": {
                         "$ref": "#/definitions/internal_transport_http_settings.PatchItem"
                     }
+                }
+            }
+        },
+        "internal_transport_http_skill.ErrorDoc": {
+            "type": "object",
+            "properties": {
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_skill.PatchSkillRequest": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "maxLength": 256
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "markdown": {
+                    "type": "string",
+                    "maxLength": 10000
+                },
+                "sortOrder": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "trigger": {
+                    "type": "string",
+                    "maxLength": 64
+                }
+            }
+        },
+        "internal_transport_http_skill.SkillDataResponse": {
+            "type": "object",
+            "properties": {
+                "skill": {
+                    "$ref": "#/definitions/internal_transport_http_skill.SkillResponse"
+                }
+            }
+        },
+        "internal_transport_http_skill.SkillDeleteDataResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_transport_http_skill.SkillDeleteResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_skill.SkillDeleteDataResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_skill.SkillPageResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_transport_http_skill.SkillResponse"
+                            }
+                        },
+                        "total": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_skill.SkillResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdByUserID": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "markdown": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "sortOrder": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "trigger": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "updatedByUserID": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_transport_http_skill.SkillResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/internal_transport_http_skill.SkillDataResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_skill.SkillSummaryPageResponseDoc": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_transport_http_skill.SkillSummaryResponse"
+                            }
+                        },
+                        "total": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_skill.SkillSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "sortOrder": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "trigger": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_transport_http_skill.WriteSkillRequest": {
+            "type": "object",
+            "required": [
+                "markdown",
+                "title",
+                "trigger"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "maxLength": 256
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "markdown": {
+                    "type": "string",
+                    "maxLength": 10000
+                },
+                "sortOrder": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "trigger": {
+                    "type": "string",
+                    "maxLength": 64
                 }
             }
         },

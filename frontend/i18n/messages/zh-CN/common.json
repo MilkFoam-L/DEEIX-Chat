@@ -46,6 +46,7 @@
     "search": "搜索",
     "recent": "对话",
     "files": "文件",
+    "skillsPrompt": "Skills & Prompts",
     "searchTitle": "搜索",
     "searchDescription": "搜索相关对话 ID、标题、标签和模型",
     "searchPlaceholder": "搜索对话 ID、标题、标签或模型",
@@ -56,6 +57,7 @@
     "openSidebar": "打开侧边栏",
     "toggleSidebar": "切换侧边栏",
     "settings": "设置",
+    "announcements": "公告",
     "language": "语言",
     "upgradePlan": "升级计划",
     "admin": "管理后台",
@@ -64,6 +66,11 @@
     "fallbackUser": "用户",
     "today": "今天",
     "yesterday": "昨天"
+  },
+  "time": {
+    "todayTime": "{time}",
+    "thisYearDateTime": "{month}月{day}日 {time}",
+    "fullDateTime": "{year}年{month}月{day}日 {time}"
   },
   "table": {
     "search": "搜索",
@@ -75,7 +82,7 @@
     "refresh": "刷新",
     "selectedItems": "已选 {count} 项",
     "pagination": "共 {total} 条，第 {page} / {pageCount} 页",
-    "pageSize": "{size} / 页",
+    "pageSize": "{size} 条 / 页",
     "previousPage": "上一页",
     "nextPage": "下一页"
   },

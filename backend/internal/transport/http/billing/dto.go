@@ -21,14 +21,14 @@ type SubscribeRequest struct {
 
 // CreateCheckoutRequest 创建支付收银台请求。
 type CreateCheckoutRequest struct {
-	OrderType       string  `json:"orderType" binding:"omitempty,oneof=subscription topup"`
-	PriceID         uint    `json:"priceID" binding:"omitempty,min=1"`
-	AmountUSD       float64 `json:"amountUSD" binding:"omitempty,min=0"`
-	Cycles          int     `json:"cycles" binding:"min=1,max=120"`
-	PaymentProvider string  `json:"paymentProvider" binding:"omitempty,oneof=stripe epay"`
-	EPayType        string  `json:"epayType" binding:"omitempty,max=32"`
-	SuccessURL      string  `json:"successURL" binding:"omitempty,max=512"`
-	CancelURL       string  `json:"cancelURL" binding:"omitempty,max=512"`
+	OrderType        string `json:"orderType" binding:"omitempty,oneof=subscription topup"`
+	PriceID          uint   `json:"priceID" binding:"omitempty,min=1"`
+	AmountMinorUnits int64  `json:"amountMinorUnits" binding:"omitempty,min=0"`
+	Cycles           int    `json:"cycles" binding:"min=1,max=120"`
+	PaymentProvider  string `json:"paymentProvider" binding:"omitempty,oneof=stripe epay"`
+	EPayType         string `json:"epayType" binding:"omitempty,max=32"`
+	SuccessURL       string `json:"successURL" binding:"omitempty,max=512"`
+	CancelURL        string `json:"cancelURL" binding:"omitempty,max=512"`
 }
 
 // UpsertModelPricingRequest 保存模型计费单价。金额单位均为美元。
@@ -51,6 +51,8 @@ type UpsertModelPricingRequest struct {
 type BillingConfigRequest struct {
 	Mode                     string                     `json:"mode" binding:"required,oneof=self period usage"`
 	PrepaidAmountUSD         *float64                   `json:"prepaidAmountUSD" binding:"omitempty,min=0"`
+	USDToCNYRate             *float64                   `json:"usdToCNYRate" binding:"omitempty,gt=0"`
+	DisplayCurrency          *string                    `json:"displayCurrency" binding:"omitempty,oneof=USD CNY"`
 	NativeToolBillingEnabled *bool                      `json:"nativeToolBillingEnabled"`
 	NativeToolPricing        []NativeToolPricingRequest `json:"nativeToolPricing"`
 }
@@ -105,13 +107,14 @@ type RedeemCodeRequest struct {
 
 // UpdateBillingPlanRequest 保存周期套餐。
 type UpdateBillingPlanRequest struct {
-	Name            string  `json:"name" binding:"required,min=1,max=64"`
-	Description     string  `json:"description" binding:"max=255"`
-	PeriodCreditUSD float64 `json:"periodCreditUSD" binding:"min=0"`
-	DiscountPercent int     `json:"discountPercent" binding:"min=0,max=100"`
-	Currency        string  `json:"currency" binding:"omitempty,max=16"`
-	AmountUSD       float64 `json:"amountUSD" binding:"min=0"`
-	BillingInterval string  `json:"billingInterval" binding:"required,oneof=month year lifetime"`
+	Name              string  `json:"name" binding:"required,min=1,max=64"`
+	Description       string  `json:"description" binding:"max=255"`
+	PeriodCreditUSD   float64 `json:"periodCreditUSD" binding:"min=0"`
+	DiscountPercent   int     `json:"discountPercent" binding:"min=0,max=100"`
+	Currency          string  `json:"currency" binding:"omitempty,max=16"`
+	AmountUSD         float64 `json:"amountUSD" binding:"min=0"`
+	BillingInterval   string  `json:"billingInterval" binding:"required,oneof=month year lifetime"`
+	PermissionGroupID *uint   `json:"permissionGroupID"`
 }
 
 type nullableIntRequest struct {
@@ -181,6 +184,7 @@ type BillingPlanResponse struct {
 	DiscountPercent     int                    `json:"discountPercent"`
 	SortOrder           int                    `json:"sortOrder"`
 	IsActive            bool                   `json:"isActive"`
+	PermissionGroupID   *uint                  `json:"permissionGroupID"`
 	Prices              []BillingPriceResponse `json:"prices"`
 }
 
@@ -253,6 +257,7 @@ type UsageLedgerResponse struct {
 	ModelVendor         string    `json:"modelVendor"`
 	ModelIcon           string    `json:"modelIcon"`
 	IsFreeModel         bool      `json:"isFreeModel"`
+	BillingAt           time.Time `json:"billingAt"`
 	UsageDate           time.Time `json:"usageDate"`
 	InputTokens         int64     `json:"inputTokens"`
 	CacheReadTokens     int64     `json:"cacheReadTokens"`
@@ -477,6 +482,30 @@ type ModelPricingDataResponse struct {
 	ModelPricing ModelPricingResponse `json:"modelPricing"`
 }
 
+// OpenRouterOfficialPricingItemResponse OpenRouter 官方模型定价项。
+type OpenRouterOfficialPricingItemResponse struct {
+	ID            string                                       `json:"id"`
+	CanonicalSlug string                                       `json:"canonicalSlug"`
+	Name          string                                       `json:"name"`
+	Pricing       OpenRouterOfficialPricingUnitPricingResponse `json:"pricing"`
+}
+
+// OpenRouterOfficialPricingUnitPricingResponse OpenRouter 官方模型价格字段。
+type OpenRouterOfficialPricingUnitPricingResponse struct {
+	Prompt          string `json:"prompt"`
+	Completion      string `json:"completion"`
+	InputCacheRead  string `json:"inputCacheRead"`
+	InputCacheWrite string `json:"inputCacheWrite"`
+}
+
+// OpenRouterOfficialPricingDataResponse OpenRouter 官方模型定价缓存响应。
+type OpenRouterOfficialPricingDataResponse struct {
+	FetchedAt time.Time                               `json:"fetchedAt"`
+	Cached    bool                                    `json:"cached"`
+	Stale     bool                                    `json:"stale"`
+	Items     []OpenRouterOfficialPricingItemResponse `json:"items"`
+}
+
 // BillingConfigResponse 计费全局配置响应。
 type BillingConfigResponse struct {
 	Mode                     string                      `json:"mode"`
@@ -486,6 +515,7 @@ type BillingConfigResponse struct {
 	NativeToolPricing        []NativeToolPricingResponse `json:"nativeToolPricing"`
 	PaymentProviders         []string                    `json:"paymentProviders"`
 	USDToCNYRate             float64                     `json:"usdToCNYRate"`
+	DisplayCurrency          string                      `json:"displayCurrency"`
 	EPayTypes                []PaymentTypeResponse       `json:"epayTypes"`
 }
 
@@ -589,6 +619,12 @@ type ModelPricingListResponseDoc struct {
 	} `json:"data"`
 }
 
+// OpenRouterOfficialPricingResponseDoc OpenRouter 官方模型定价响应文档。
+type OpenRouterOfficialPricingResponseDoc struct {
+	ErrorMsg string                                `json:"errorMsg"`
+	Data     OpenRouterOfficialPricingDataResponse `json:"data"`
+}
+
 // BillingConfigResponseDoc 计费全局配置响应文档。
 type BillingConfigResponseDoc struct {
 	ErrorMsg string                    `json:"errorMsg"`
@@ -674,6 +710,7 @@ func toPlanListResponse(views []appbilling.BillingPlanView) []BillingPlanRespons
 			DiscountPercent:     v.DiscountPercent,
 			SortOrder:           v.SortOrder,
 			IsActive:            v.IsActive,
+			PermissionGroupID:   v.PermissionGroupID,
 			Prices:              prices,
 		})
 	}
@@ -906,6 +943,7 @@ func toUsageLedgerResponse(u domainbilling.UsageLedger) UsageLedgerResponse {
 		ModelVendor:         snapshotIdentity.ModelVendor,
 		ModelIcon:           snapshotIdentity.ModelIcon,
 		IsFreeModel:         u.IsFreeModel,
+		BillingAt:           u.BillingAt,
 		UsageDate:           u.UsageDate,
 		InputTokens:         u.InputTokens,
 		CacheReadTokens:     u.CacheReadTokens,
@@ -1118,6 +1156,7 @@ func planUpdateInputFromRequest(req UpdateBillingPlanRequest) appbilling.PlanUpd
 		Currency:            req.Currency,
 		AmountCents:         usdToCents(req.AmountUSD),
 		BillingInterval:     req.BillingInterval,
+		PermissionGroupID:   req.PermissionGroupID,
 	}
 }
 

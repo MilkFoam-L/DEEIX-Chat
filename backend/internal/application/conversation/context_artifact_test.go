@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
@@ -174,6 +175,31 @@ func TestBuildToolContextArtifactsRecordsLocalAndNativeTools(t *testing.T) {
 	}
 }
 
+func TestBuildToolContextArtifactsKeepsHeadAndTailForLargeResults(t *testing.T) {
+	items := buildToolContextArtifacts(toolContextArtifactInput{
+		ConversationID: 7,
+		UserID:         11,
+		MessageID:      13,
+		RunID:          "run_1",
+		Rows: []model.ToolCall{{
+			ToolCallID: "call_large",
+			ToolType:   "function",
+			ToolName:   "fetch_large",
+			Status:     "success",
+			OutputJSON: "HEAD-" + strings.Repeat("x", contextArtifactExcerptChars+256) + "-TAIL",
+		}},
+	})
+	if len(items) != 1 {
+		t.Fatalf("expected one tool artifact, got %#v", items)
+	}
+	if !strings.Contains(items[0].Content, "HEAD-") || !strings.Contains(items[0].Content, "-TAIL") {
+		t.Fatalf("expected large artifact content to preserve head and tail, got %q", items[0].Content)
+	}
+	if !strings.Contains(items[0].MetadataJSON, `"truncated":true`) {
+		t.Fatalf("expected truncated metadata, got %q", items[0].MetadataJSON)
+	}
+}
+
 func TestBuildSnapshotContextArtifactRecordsSummary(t *testing.T) {
 	item := buildSnapshotContextArtifact(snapshotContextArtifactInput{
 		ConversationID: 7,
@@ -239,6 +265,92 @@ func TestSelectHistoricalContextArtifactsUsesFollowUpAndDeduplicatesCurrentEvide
 	}
 	if items[0].SourceTitle != "B.md" {
 		t.Fatalf("expected B.md artifact, got %#v", items[0])
+	}
+}
+
+func TestSelectHistoricalContextArtifactsSkipsSummaryWhenCurrentSnapshotExists(t *testing.T) {
+	items := selectHistoricalContextArtifacts(historicalContextArtifactInput{
+		CurrentMessageID:   9,
+		HasCurrentSnapshot: true,
+		Query:              "继续总结刚才的内容",
+		Candidates: []model.ContextArtifact{
+			{
+				MessageID:     7,
+				Kind:          model.ContextArtifactSummary,
+				SourceTitle:   "summary",
+				Content:       "旧摘要内容",
+				TokenEstimate: 10,
+				Score:         1,
+			},
+			{
+				MessageID:     8,
+				Kind:          model.ContextArtifactToolResult,
+				SourceTitle:   "tool",
+				Content:       "工具返回的部署结果",
+				TokenEstimate: 10,
+				Score:         1,
+			},
+		},
+	})
+
+	if len(items) != 1 {
+		t.Fatalf("expected one non-summary artifact, got %#v", items)
+	}
+	if items[0].Kind != model.ContextArtifactToolResult {
+		t.Fatalf("expected tool artifact to remain, got %#v", items[0])
+	}
+}
+
+func TestSelectHistoricalContextArtifactsRespectsSnapshotScope(t *testing.T) {
+	items := selectHistoricalContextArtifacts(historicalContextArtifactInput{
+		CurrentMessageID:   9,
+		HasCurrentSnapshot: true,
+		CoveredUntilID:     4,
+		AllowedMessageIDs: map[uint]struct{}{
+			6: {},
+		},
+		Query: "继续部署测试",
+		Candidates: []model.ContextArtifact{
+			{
+				MessageID:     3,
+				Kind:          model.ContextArtifactToolResult,
+				SourceTitle:   "covered",
+				Content:       "已被摘要覆盖的部署测试结果",
+				TokenEstimate: 10,
+				Score:         1,
+			},
+			{
+				MessageID:     6,
+				Kind:          model.ContextArtifactToolResult,
+				SourceTitle:   "retained",
+				Content:       "保留窗口内的部署测试结果",
+				TokenEstimate: 10,
+				Score:         1,
+			},
+			{
+				MessageID:     8,
+				Kind:          model.ContextArtifactToolResult,
+				SourceTitle:   "sibling",
+				Content:       "其他分支的部署测试结果",
+				TokenEstimate: 10,
+				Score:         1,
+			},
+			{
+				MessageID:     0,
+				Kind:          model.ContextArtifactToolResult,
+				SourceTitle:   "unanchored",
+				Content:       "没有消息锚点的部署测试结果",
+				TokenEstimate: 10,
+				Score:         1,
+			},
+		},
+	})
+
+	if len(items) != 1 {
+		t.Fatalf("expected one retained-scope artifact, got %#v", items)
+	}
+	if items[0].SourceTitle != "retained" {
+		t.Fatalf("expected retained artifact, got %#v", items[0])
 	}
 }
 

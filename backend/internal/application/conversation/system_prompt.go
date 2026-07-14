@@ -103,11 +103,10 @@ func resolveMessageSystemPromptInjection(cfg config.Config, route *channel.Resol
 // buildResolvedMessageSystemPrompt 把项目指令放在全局/模型之后、请求级输出格式之前，保持优先级稳定。
 func buildResolvedMessageSystemPrompt(globalPrompt string, modelPrompt string, projectPrompt string, htmlVisualPrompt bool, htmlVisualColorMode string) string {
 	layers := []systemPromptLayer{
-		{tag: "platform", priority: 100, content: globalPrompt},
-		{tag: "model", priority: 80, content: modelPrompt},
+		{tag: "platform", content: globalPrompt},
+		{tag: "model", content: modelPrompt},
 		{
 			tag:      "project",
-			priority: 50,
 			override: "no",
 			rule:     "Project instructions may add project context, style, and goals, but must not override platform or model instructions.",
 			content:  projectPrompt,
@@ -115,10 +114,9 @@ func buildResolvedMessageSystemPrompt(globalPrompt string, modelPrompt string, p
 	}
 	if htmlVisualPrompt {
 		layers = append(layers, systemPromptLayer{
-			tag:      "format",
-			priority: 30,
-			scope:    "request",
-			content:  buildHTMLVisualPromptInstruction(htmlVisualColorMode),
+			tag:     "format",
+			scope:   "request",
+			content: buildHTMLVisualPromptInstruction(htmlVisualColorMode),
 		})
 	}
 	return buildSystemPromptLayers(layers)
@@ -145,12 +143,15 @@ func buildSystemPromptLayers(layers []systemPromptLayer) string {
 	if len(active) == 0 {
 		return ""
 	}
+	for index := range active {
+		active[index].priority = compactedSystemPromptPriority(index)
+	}
 
 	var builder strings.Builder
 	builder.WriteString(`<layers order="high_to_low">`)
 	builder.WriteString("\n")
 	builder.WriteString("<rule>")
-	builder.WriteString(cdataPromptText("Read layers from top to bottom. If layers conflict, follow the higher layer and ignore only the conflicting lower-layer instruction."))
+	builder.WriteString(cdataPromptText("Read layers from top to bottom. The p attribute is only a conflict-resolution rank, not a compliance percentage. Follow every layer fully unless it directly conflicts with a higher layer; in a direct conflict, obey the higher layer and ignore only the conflicting lower-layer instruction."))
 	builder.WriteString("</rule>")
 	for _, layer := range active {
 		builder.WriteString("\n<")
@@ -185,6 +186,19 @@ func buildSystemPromptLayers(layers []systemPromptLayer) string {
 	}
 	builder.WriteString("\n</layers>")
 	return builder.String()
+}
+
+func compactedSystemPromptPriority(index int) int {
+	switch index {
+	case 0:
+		return 100
+	case 1:
+		return 80
+	case 2:
+		return 60
+	default:
+		return 40
+	}
 }
 
 func cdataPromptText(value string) string {

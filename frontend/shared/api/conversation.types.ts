@@ -25,6 +25,12 @@ export type ConversationDTO = {
   updatedAt: string;
 };
 
+export type ConversationDefaultModelCandidateDTO = {
+  platformModelName: string;
+  source: string;
+  usedAt: string | null;
+};
+
 export type ConversationStatusFilter = "active" | "archived" | "all";
 export type ConversationStarredFilter = "all" | "starred" | "unstarred";
 export type ConversationShareFilter = "all" | "shared" | "unshared";
@@ -398,6 +404,7 @@ export type SendMessageRequest = {
   clientRunID?: string;
   fileIDs?: string[];
   selectedToolIDs?: number[];
+  skillIDs?: number[];
   htmlVisualPrompt?: boolean;
   htmlVisualColorMode?: "light" | "dark";
   parentMessagePublicID?: string;
@@ -417,9 +424,21 @@ export type MediaImageRequest = {
   branchReason?: "default" | "retry" | "edit";
 };
 
+export type MediaVideoRequest = {
+  prompt: string;
+  model?: string;
+  options?: ConversationOptions;
+  clientRunID?: string;
+  fileIDs?: string[];
+  parentMessagePublicID?: string;
+  sourceMessagePublicID?: string;
+  branchReason?: "default" | "retry" | "edit";
+};
+
 export type SendMessageResult = {
   userMessage: MessageDTO;
   assistantMessage: MessageDTO;
+  metadataRefreshHint?: "pending" | "not_needed" | "skipped_no_titleable_content" | string;
 };
 
 export type StreamMessageEvent =
@@ -444,6 +463,14 @@ export type StreamMessageEvent =
       type: "upstream_think_delta";
       seq?: number;
       status: string;
+      title?: string;
+      summary?: string;
+      stage?: string;
+      roundID?: string;
+      eventID?: string;
+      kind?: ReasoningDeltaDTO["kind"] | string;
+      delta?: string;
+      contentMarkdown?: string;
       block?: TraceBlockDTO;
       trace?: MessageProcessTraceDTO;
       reasoning?: ReasoningDeltaDTO;
@@ -467,6 +494,7 @@ export type StreamMessageEvent =
       seq?: number;
       status: string;
       message: string;
+      content_type?: string;
     }
   | {
       type: "media_image_delta";

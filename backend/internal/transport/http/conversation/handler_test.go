@@ -2,10 +2,14 @@ package conversation
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	appbilling "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/billing"
 	appconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/llm"
+	"github.com/gin-gonic/gin"
 )
 
 func TestSafeFileContentTypeDowngradesActiveContent(t *testing.T) {
@@ -22,6 +26,23 @@ func TestSafeFileContentTypeDowngradesActiveContent(t *testing.T) {
 		if got := safeFileContentType(tt.contentType); got != tt.want {
 			t.Fatalf("safeFileContentType(%q) = %q, want %q", tt.contentType, got, tt.want)
 		}
+	}
+}
+
+func TestMessagePageParamsAllowsRestoreWindow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/messages?page=1&page_size=1000", nil)
+
+	_, pageSize := messagePageParams(c)
+	if pageSize != 1000 {
+		t.Fatalf("messagePageParams page size = %d, want 1000", pageSize)
+	}
+
+	_, normalPageSize := pageParams(c)
+	if normalPageSize != maxHTTPPageSize {
+		t.Fatalf("pageParams page size = %d, want %d", normalPageSize, maxHTTPPageSize)
 	}
 }
 
@@ -80,6 +101,13 @@ func TestMapStreamErrorDoesNotExposeUpstreamUnauthorizedAsPlatformUnauthorized(t
 	}
 	if mapped.Code == "auth.unauthorized" || mapped.Code == "auth.invalid_token" || mapped.Code == "auth.session_invalid" {
 		t.Fatalf("expected upstream 401 to avoid platform auth codes, got %#v", mapped)
+	}
+}
+
+func TestMapBillingStreamErrorReturnsConcurrencyLimit(t *testing.T) {
+	mapped := mapBillingStreamError(appbilling.ErrUsageConcurrencyLimitExceeded)
+	if mapped.Status != http.StatusTooManyRequests || mapped.Code != "billing.concurrency_limit_exceeded" {
+		t.Fatalf("billing stream error = %#v", mapped)
 	}
 }
 

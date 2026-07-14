@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	defaultAllowedMIMETypes = "image/jpeg,image/png,image/webp,image/gif,text/plain,text/markdown,text/csv,text/yaml,application/json,application/yaml,application/x-yaml,application/toml,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-	defaultRAGModel         = "sentence-transformers/all-MiniLM-L6-v2"
-	defaultLoginPageTitle   = "Sign in to DEEIX Chat"
+	legacyDefaultAllowedMIMETypes = "image/jpeg,image/png,image/webp,image/gif,text/plain,text/markdown,text/csv,text/yaml,application/json,application/yaml,application/x-yaml,application/toml,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+	defaultAllowedMIMETypes       = "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,text/plain,text/markdown,text/csv,text/yaml,application/json,application/yaml,application/x-yaml,application/toml,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+	defaultRAGModel               = "sentence-transformers/all-MiniLM-L6-v2"
 )
 
 // defaultSettings 返回所有动态配置的默认种子数据。
@@ -23,7 +23,6 @@ func defaultSettings() []domainsettings.SystemSetting {
 		{Namespace: "auth", Key: "rate_limit_enabled", Value: "false", ValueType: "bool", Description: "是否启用平台 HTTP 429 限流"},
 		{Namespace: "auth", Key: "rate_limit_rpm", Value: "60", ValueType: "int", Description: "全局限流 RPM"},
 		{Namespace: "auth", Key: "public_auth_rate_limit_rpm", Value: "30", ValueType: "int", Description: "公开鉴权接口限流 RPM"},
-		{Namespace: "auth", Key: "login_page_title", Value: defaultLoginPageTitle, ValueType: "string", Description: "登录页面标题"},
 		{Namespace: "auth", Key: "login_default_next_path", Value: "/chat", ValueType: "string", Description: "无 next 参数时登录成功后的默认跳转路径"},
 		{Namespace: "auth", Key: "logo_url", Value: "", ValueType: "string", Description: "站点 Logo URL，留空使用默认 Logo"},
 		{Namespace: "auth", Key: "username_login_enabled", Value: "true", ValueType: "bool", Description: "是否允许用户名密码登录"},
@@ -31,6 +30,7 @@ func defaultSettings() []domainsettings.SystemSetting {
 		{Namespace: "auth", Key: "third_party_login_enabled", Value: "true", ValueType: "bool", Description: "是否启用第三方登录入口"},
 		{Namespace: "auth", Key: "email_registration_enabled", Value: "true", ValueType: "bool", Description: "是否允许邮箱注册"},
 		{Namespace: "auth", Key: "email_verification_enabled", Value: "false", ValueType: "bool", Description: "邮箱注册时是否要求邮箱验证码"},
+		{Namespace: "auth", Key: "password_reset_enabled", Value: "false", ValueType: "bool", Description: "是否允许用户在登录页重置密码"},
 		{Namespace: "auth", Key: "smtp_host", Value: "", ValueType: "string", Description: "邮箱验证码 SMTP 主机"},
 		{Namespace: "auth", Key: "smtp_port", Value: "587", ValueType: "int", Description: "邮箱验证码 SMTP 端口"},
 		{Namespace: "auth", Key: "smtp_username", Value: "", ValueType: "string", Description: "邮箱验证码 SMTP 用户名"},
@@ -45,10 +45,11 @@ func defaultSettings() []domainsettings.SystemSetting {
 
 		// 计费配置
 		{Namespace: "billing", Key: "mode", Value: "self", ValueType: "string", Description: "计费方式：self=自用模式，period=周期计费，usage=按量计费"},
-		{Namespace: "billing", Key: "prepaid_amount_usd", Value: "0", ValueType: "string", Description: "按量调用前要求账户保留的最低预付余额(美元)"},
+		{Namespace: "billing", Key: "prepaid_amount_usd", Value: "0", ValueType: "string", Description: "每个付费调用预留的风险预算(美元)，0表示按剩余槽位动态分配可用预算，最多5个并发调用"},
 		{Namespace: "billing", Key: "native_tool_billing_enabled", Value: "true", ValueType: "bool", Description: "是否按官方默认价格计费模型原生工具调用"},
 		{Namespace: "billing", Key: "native_tool_pricing_json", Value: nativetool.DefaultPricingJSON(), ValueType: "json", Description: "官方原生工具计费覆盖 JSON，按 toolKey 配置 priceNanousd、unit、priceLabel、billable"},
 		{Namespace: "billing", Key: "usd_to_cny_rate", Value: "7.2", ValueType: "string", Description: "易支付美元兑人民币汇率"},
+		{Namespace: "billing", Key: "display_currency", Value: "USD", ValueType: "string", Description: "用户端费用展示币种：USD 或 CNY"},
 		{Namespace: "billing", Key: "payment_providers", Value: "disabled", ValueType: "string", Description: "启用支付渠道，多个用英文逗号分隔：stripe,epay"},
 		{Namespace: "billing", Key: "stripe_publishable_key", Value: "", ValueType: "string", Description: "Stripe Publishable Key"},
 		{Namespace: "billing", Key: "stripe_secret_key", Value: "", ValueType: "string", Description: "Stripe Secret Key"},
@@ -62,12 +63,15 @@ func defaultSettings() []domainsettings.SystemSetting {
 		{Namespace: "chat", Key: "max_context_messages", Value: "20", ValueType: "int", Description: "上下文消息数"},
 		{Namespace: "chat", Key: "context_max_turns", Value: "48", ValueType: "int", Description: "最大对话轮次"},
 		{Namespace: "chat", Key: "context_max_input_tokens", Value: "32000", ValueType: "int", Description: "最大输入 token"},
-		{Namespace: "chat", Key: "context_compact_trigger_tokens", Value: "32768", ValueType: "int", Description: "压缩触发阈值"},
+		{Namespace: "chat", Key: "context_compact_enabled", Value: "false", ValueType: "bool", Description: "是否允许上下文压缩功能"},
+		{Namespace: "chat", Key: "context_compact_trigger_tokens", Value: "65536", ValueType: "int", Description: "压缩触发阈值"},
 		{Namespace: "chat", Key: "context_compact_preserve_recent_turns", Value: "8", ValueType: "int", Description: "压缩保留轮次"},
+		{Namespace: "chat", Key: "conversation_default_model", Value: "", ValueType: "string", Description: "新会话系统推荐模型；留空时回退到第一个可用模型"},
 		{Namespace: "chat", Key: "conversation_task_model", Value: "follow", ValueType: "string", Description: "会话标题/标签生成任务使用的聊天模型，follow 表示跟随当前会话模型；图片模型不会用于标题/标签生成"},
 		{Namespace: "chat", Key: "conversation_title_prompt", Value: "", ValueType: "string", Description: "会话标题生成提示词，支持 {{MESSAGES}} 占位符；空串使用内置默认值"},
 		{Namespace: "chat", Key: "conversation_labels_prompt", Value: "", ValueType: "string", Description: "会话标签生成提示词，支持 {{MESSAGES}} 占位符；空串使用内置默认值"},
 		{Namespace: "chat", Key: "default_system_prompt", Value: "", ValueType: "string", Description: "全局默认系统提示词，仅对聊天任务生效；空串表示不注入"},
+		{Namespace: "chat", Key: "skills_prompt", Value: "", ValueType: "string", Description: "Skills 调用提示词；空串使用内置默认值"},
 		{Namespace: "chat", Key: "model_option_policy_mode", Value: "allowlist", ValueType: "string", Description: "模型 options 透传策略：allowlist=仅白名单，denylist=黑名单拦截，disabled=禁止透传"},
 		{Namespace: "chat", Key: "model_option_allowed_paths", Value: config.DefaultModelOptionAllowedPathsJSON(), ValueType: "json", Description: "模型 options 白名单路径 JSON，default 对所有协议生效"},
 		{Namespace: "chat", Key: "model_option_denied_paths", Value: config.DefaultModelOptionDeniedPathsJSON(), ValueType: "json", Description: "模型 options 黑名单路径 JSON，default 对所有协议生效"},
@@ -80,8 +84,8 @@ func defaultSettings() []domainsettings.SystemSetting {
 		// 文件处理配置
 		{Namespace: "file", Key: "image_max_dimension", Value: "1024", ValueType: "int", Description: "图片发送前缩放最大边长(px)，0=不缩放"},
 		{Namespace: "file", Key: "full_context_limit_enabled", Value: "true", ValueType: "bool", Description: "是否启用全文注入大小、Token、PDF页数限制"},
-		{Namespace: "file", Key: "file_full_context_max_bytes", Value: "51200", ValueType: "int", Description: "文本文件全文注入最大字节数(50KB)，留空或0表示不限制"},
-		{Namespace: "file", Key: "full_context_max_tokens", Value: "12000", ValueType: "int", Description: "全文注入最大token预算，留空或0表示不限制"},
+		{Namespace: "file", Key: "file_full_context_max_bytes", Value: "65536", ValueType: "int", Description: "文本文件全文注入最大字节数(64KB)，留空或0表示不限制"},
+		{Namespace: "file", Key: "full_context_max_tokens", Value: "65536", ValueType: "int", Description: "全文注入最大token预算，留空或0表示不限制"},
 		{Namespace: "file", Key: "image_max_bytes", Value: "", ValueType: "int", Description: "图片单文件大小上限(字节)，留空则回退默认附件大小上限"},
 		{Namespace: "file", Key: "doc_max_bytes", Value: "", ValueType: "int", Description: "文档单文件大小上限(字节)，留空则回退默认附件大小上限"},
 		{Namespace: "file", Key: "full_context_pdf_max_pages", Value: "20", ValueType: "int", Description: "PDF Full Context最大页数，留空或0表示不限制"},
@@ -119,6 +123,7 @@ func defaultSettings() []domainsettings.SystemSetting {
 		{Namespace: "extract", Key: "aliyun_ocr_timeout_seconds", Value: "60", ValueType: "int", Description: "阿里云 OCR 请求超时(秒)，默认 60s"},
 		{Namespace: "extract", Key: "mineru_source", Value: "cloud", ValueType: "string", Description: "MinerU 服务类型(cloud/self_hosted)"},
 		{Namespace: "extract", Key: "mineru_base_url", Value: "https://mineru.net/api/v4", ValueType: "string", Description: "MinerU 服务地址，默认 https://mineru.net/api/v4"},
+		{Namespace: "extract", Key: "mineru_file_types", Value: "pdf,word,presentation", ValueType: "string", Description: "MinerU 处理的文件类型，逗号分隔：pdf,word,presentation,excel"},
 		{Namespace: "extract", Key: "mineru_auth_token", Value: "", ValueType: "string", Description: "MinerU 鉴权 Token"},
 		{Namespace: "extract", Key: "mineru_timeout_seconds", Value: "180", ValueType: "int", Description: "MinerU 请求超时(秒)，默认 180s"},
 		{Namespace: "extract", Key: "llm_ocr_base_url", Value: "", ValueType: "string", Description: "LLM OCR 服务地址（OpenAI 兼容 chat/completions 视觉模型）"},
@@ -174,6 +179,7 @@ func defaultSettings() []domainsettings.SystemSetting {
 		{Namespace: "mcp", Key: "mcp_max_selected_tools_per_message", Value: "32", ValueType: "int", Description: "单次消息最多可选择的 MCP 工具数量"},
 		{Namespace: "mcp", Key: "mcp_max_llm_calls_per_run", Value: "5", ValueType: "int", Description: "单次 MCP 工具运行最大 LLM 请求次数（最小 2，首次请求 + 工具后续请求 + 最终总结）"},
 		{Namespace: "mcp", Key: "mcp_max_tool_calls_per_run", Value: "8", ValueType: "int", Description: "单次 MCP 工具运行最大 MCP Tool Call 次数"},
+		{Namespace: "mcp", Key: "mcp_tool_prompt", Value: "", ValueType: "string", Description: "MCP Tool 调用提示词；空串使用内置默认值"},
 
 		// 熔断配置
 		{Namespace: "circuit", Key: "channel_failure_threshold", Value: "3", ValueType: "int", Description: "熔断触发次数"},

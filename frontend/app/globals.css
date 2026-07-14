@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "shadcn/tailwind.css";
 @import "tw-animate-css";
 @source "../node_modules/streamdown/dist/*.js";
 @source "../node_modules/@streamdown/code/dist/*.js";
@@ -1008,6 +1009,10 @@
   [role="button"] {
     touch-action: manipulation;
   }
+  button:not(:disabled):not([aria-disabled="true"]),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
   body {
     @apply bg-background text-foreground;
   }
@@ -1023,6 +1028,10 @@
     background-color: var(--data-table-header-bg);
   }
 
+  .data-table-viewport {
+    transition: height 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
   tbody .data-table-row {
     --data-table-row-bg: var(--background);
     --data-table-row-hover-bg: var(--accent);
@@ -1034,17 +1043,53 @@
     --data-table-row-hover-bg: color-mix(in oklch, var(--muted) 30%, var(--background));
   }
 
+  tbody .data-table-row[data-tone="muted"] > .data-table-sticky-end-cell {
+    background-color: color-mix(in oklch, var(--muted) 20%, var(--background));
+  }
+
+  tbody .data-table-row[data-tone="warning"] {
+    --data-table-row-bg: color-mix(in oklch, var(--amber-100) 45%, var(--background));
+    --data-table-row-hover-bg: color-mix(in oklch, var(--amber-100) 60%, var(--background));
+  }
+
+  tbody .data-table-row[data-tone="warning"] > .data-table-sticky-end-cell {
+    background-color: color-mix(in oklch, var(--amber-100) 45%, var(--background));
+  }
+
+  .dark tbody .data-table-row[data-tone="warning"] {
+    --data-table-row-bg: color-mix(in oklch, var(--amber-900) 18%, var(--background));
+    --data-table-row-hover-bg: color-mix(in oklch, var(--amber-900) 24%, var(--background));
+  }
+
+  .dark tbody .data-table-row[data-tone="warning"] > .data-table-sticky-end-cell {
+    background-color: color-mix(in oklch, var(--amber-900) 18%, var(--background));
+  }
+
   tbody .data-table-row[data-selected="true"] {
     --data-table-row-bg: var(--accent);
     --data-table-row-hover-bg: var(--accent);
+  }
+
+  tbody .data-table-row[data-selected="true"] > .data-table-sticky-end-cell {
+    background-color: var(--accent);
   }
 
   tbody .data-table-row:not([data-interactive="false"]):hover {
     --data-table-row-bg: var(--data-table-row-hover-bg);
   }
 
+  tbody .data-table-row:not([data-interactive="false"]):hover > .data-table-sticky-end-cell {
+    background-color: var(--data-table-row-hover-bg);
+  }
+
   tbody .data-table-sticky-end-cell {
     background-color: var(--data-table-row-bg);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .data-table-viewport {
+      transition: none;
+    }
   }
 }
 
@@ -1061,7 +1106,7 @@
 }
 
 :root[data-chat-font="mono"] {
-  --font-chat: var(--font-mono);
+  --font-chat: var(--font-jetbrains-mono, "JetBrains Mono", var(--font-mono));
 }
 
 :root[data-chat-font-weight="medium"] {
@@ -1095,6 +1140,13 @@
 }
 
 @layer utilities {
+  @media (hover: none), (pointer: coarse), (any-hover: none), (any-pointer: coarse) {
+    .chat-message-meta[data-hover-actions="true"] {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
   .text-\[8px\] {
     font-size: calc(8px * var(--ui-font-scale));
   }
@@ -1156,32 +1208,6 @@
     font-weight: var(--font-chat-weight);
   }
 
-  @keyframes thinking-shimmer {
-    0% {
-      background-position: 140% 50%;
-    }
-    100% {
-      background-position: -140% 50%;
-    }
-  }
-
-  .thinking-shimmer {
-    color: transparent;
-    background-image: linear-gradient(
-      100deg,
-      color-mix(in oklch, var(--muted-foreground) 72%, var(--background)) 0%,
-      color-mix(in oklch, var(--muted-foreground) 72%, var(--background)) 36%,
-      color-mix(in oklch, var(--foreground) 90%, var(--background)) 50%,
-      color-mix(in oklch, var(--muted-foreground) 72%, var(--background)) 64%,
-      color-mix(in oklch, var(--muted-foreground) 72%, var(--background)) 100%
-    );
-    background-size: 260% 100%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    animation: thinking-shimmer 2.4s linear infinite;
-    will-change: background-position;
-  }
-
   .chat-font-content :where(
     p,
     span,
@@ -1222,6 +1248,13 @@
 
   .chat-font-content .katex {
     white-space: nowrap !important;
+  }
+
+  [data-screenshot-capturing="true"],
+  [data-screenshot-capturing="true"] * {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition: none !important;
   }
 
   .from-bg-200\/5 {

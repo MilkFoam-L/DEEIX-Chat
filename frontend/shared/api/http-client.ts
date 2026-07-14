@@ -27,6 +27,16 @@ export class ApiError extends Error {
   }
 }
 
+export class ApiNetworkError extends Error {
+  cause?: unknown;
+
+  constructor(cause?: unknown) {
+    super("errors.network.unavailable");
+    this.name = "ApiNetworkError";
+    this.cause = cause;
+  }
+}
+
 function normalizeApiErrorMessage(message: string, status: number): string {
   const normalized = message.trim();
   if (/^errors\.[a-zA-Z0-9_.]+$/.test(normalized)) {
@@ -94,7 +104,12 @@ function buildRequestInit(options: ApiRequestOptions): RequestInit {
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const endpoint = `${resolveApiBaseURL()}${path}`;
-  const response = await fetch(endpoint, buildRequestInit(options));
+  let response: Response;
+  try {
+    response = await fetch(endpoint, buildRequestInit(options));
+  } catch (error) {
+    throw new ApiNetworkError(error);
+  }
   const contentType = response.headers.get("content-type") || "";
   const responseRequestId = response.headers.get("x-request-id") || undefined;
   const payload = contentType.includes("application/json")

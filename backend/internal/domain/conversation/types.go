@@ -163,6 +163,7 @@ type Message struct {
 	Role             string
 	ContentType      string
 	Content          string
+	ReasoningContent string
 	BranchReason     string
 	SourceMessageID  *uint
 	TokenUsage       int64
@@ -406,6 +407,43 @@ type MessageTraceEventRow struct {
 	UpdatedAt       time.Time
 }
 
+// EventLog 表示后台日志中心展示的对话运行事件。
+type EventLog struct {
+	ID                uint
+	MessageID         uint
+	ConversationID    uint
+	UserID            uint
+	RunID             string
+	ProviderProtocol  string
+	UpstreamName      string
+	PlatformModelName string
+	RoutedBindingCode string
+	UpstreamModelName string
+	EventScope        string
+	EventID           string
+	EventType         string
+	Phase             string
+	Stage             string
+	RoundID           string
+	ParentEventID     string
+	Status            string
+	Title             string
+	Summary           string
+	ContentMarkdown   string
+	PayloadJSON       string
+	Seq               int
+	ToolCallID        string
+	ToolName          string
+	LatencyMS         int64
+	InputJSON         string
+	OutputJSON        string
+	ErrorJSON         string
+	StartedAt         time.Time
+	EndedAt           *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
 // ToolCall 表示工具调用记录。
 type ToolCall struct {
 	ID             uint
@@ -427,19 +465,23 @@ type ToolCall struct {
 
 // ContextSnapshot 表示上下文压缩快照。
 type ContextSnapshot struct {
-	ID             uint
-	ConversationID uint
-	MessageID      uint
-	UserID         uint
-	RunID          string
-	FromTurn       int
-	ToTurn         int
-	SourceTokens   int64
-	SummaryTokens  int64
-	SummaryText    string
-	Strategy       string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                    uint
+	ConversationID        uint
+	MessageID             uint
+	UserID                uint
+	RunID                 string
+	FromTurn              int
+	ToTurn                int
+	CoveredUntilMessageID uint
+	CoveredUntilPublicID  string
+	CoveragePathHash      string
+	CoveredMessageCount   int
+	SourceTokens          int64
+	SummaryTokens         int64
+	SummaryText           string
+	Strategy              string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // RAGChunk 单个 RAG 检索到的文本片段及其来源信息。

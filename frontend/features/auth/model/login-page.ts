@@ -1,12 +1,12 @@
 import type { LoginOptionsData, LoginPageSettings } from "@/shared/api/auth.types";
 import { ApiError } from "@/shared/api/http-client";
+import { DEFAULT_AUTH_NEXT_PATH } from "@/shared/auth/local-path";
 
-export type LoginMode = "login" | "register";
+export type LoginMode = "login" | "register" | "reset-password";
 export type ProviderAuthIntent = "login" | "register";
 
 export const DEFAULT_LOGIN_SETTINGS: LoginPageSettings = {
-  title: "Sign in to DEEIX Chat",
-  defaultNextPath: "/chat",
+  defaultNextPath: DEFAULT_AUTH_NEXT_PATH,
   logoURL: "",
 };
 
@@ -15,6 +15,7 @@ export const DEFAULT_LOGIN_OPTIONS: LoginOptionsData = {
   emailEnabled: true,
   emailRegistrationEnabled: true,
   emailVerificationEnabled: false,
+  passwordResetEnabled: false,
   turnstileRegistrationEnabled: false,
   turnstileSiteKey: "",
   providers: [],
@@ -22,13 +23,6 @@ export const DEFAULT_LOGIN_OPTIONS: LoginOptionsData = {
 
 export const TWO_FACTOR_CHALLENGE_STORAGE_KEY = "deeix-chat:2fa:challenge";
 export const TWO_FACTOR_METHODS_STORAGE_KEY = "deeix-chat:2fa:methods";
-
-export function normalizeLocalPath(value: string | undefined): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return "/chat";
-  }
-  return value;
-}
 
 export function normalizeTwoFactorInput(value: string): string {
   return value.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 32);

@@ -1,7 +1,7 @@
 import type { ChatAreaMessage, MessageAttachment } from "@/features/chat/types/messages";
 import type { MessageDTO, UpstreamDebugInfo } from "@/shared/api/conversation.types";
 
-function parseAttachments(raw: string): MessageAttachment[] {
+export function parseAttachments(raw: string): MessageAttachment[] {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -155,11 +155,6 @@ function extractInlineAlertDetails(item: MessageDTO): UpstreamDebugInfo | undefi
 
 const ROOT_BRANCH_KEY = "__root__";
 
-export type BranchSelectionPathItem = {
-  parentPublicID?: string | null;
-  publicID?: string | null;
-};
-
 type MessageLabels = {
   generationInterrupted: string;
   streamInterrupted?: string;
@@ -259,70 +254,42 @@ export function buildChildrenIndex(messages: ChatAreaMessage[]) {
   return children;
 }
 
-export function applyBranchSelectionPath(
-  previous: Record<string, string>,
-  path: BranchSelectionPathItem[],
-  obsoletePublicIDs: Array<string | null | undefined> = [],
-): Record<string, string> {
-  const obsolete = new Set(obsoletePublicIDs.map((item) => item?.trim() || "").filter(Boolean));
-  let changed = false;
-  const next = { ...previous };
-
-  for (const [key, value] of Object.entries(next)) {
-    if (obsolete.has(key) || obsolete.has(value)) {
-      delete next[key];
-      changed = true;
-    }
-  }
-
-  for (const item of path) {
-    const publicID = item.publicID?.trim() || "";
-    if (!publicID) {
-      continue;
-    }
-    const parentKey = toBranchKey(item.parentPublicID);
-    if (next[parentKey] !== publicID) {
-      next[parentKey] = publicID;
-      changed = true;
-    }
-  }
-
-  return changed ? next : previous;
-}
-
-export function resolveBranchSelectionPath(
-  messages: ChatAreaMessage[],
-  leafPublicID: string | null | undefined,
-): BranchSelectionPathItem[] {
-  const leafID = leafPublicID?.trim() || "";
-  if (!leafID) {
-    return [];
-  }
-
-  const byPublicID = new Map(messages.map((item) => [item.publicID, item]));
-  const path: BranchSelectionPathItem[] = [];
-  const visited = new Set<string>();
-  let current = byPublicID.get(leafID) ?? null;
-
-  while (current && !visited.has(current.publicID)) {
-    visited.add(current.publicID);
-    path.push({
-      parentPublicID: current.parentPublicID,
-      publicID: current.publicID,
-    });
-    current = current.parentPublicID ? byPublicID.get(current.parentPublicID) ?? null : null;
-  }
-
-  return path;
-}
-
 export function reconcileBranchSelections(messages: ChatAreaMessage[], previous: Record<string, string>) {
   const next: Record<string, string> = {};
   const children = buildChildrenIndex(messages);
+  const messagesByPublicID = new Map<string, ChatAreaMessage>();
+  let latestPublicID = "";
+
+  for (const item of messages) {
+    const publicID = item.publicID.trim();
+    if (publicID) {
+      messagesByPublicID.set(publicID, item);
+      latestPublicID = publicID;
+    }
+  }
+
+  const visited = new Set<string>();
+  let current = latestPublicID ? messagesByPublicID.get(latestPublicID) ?? null : null;
+
+  while (current) {
+    const publicID = current.publicID.trim();
+    if (!publicID || visited.has(publicID)) {
+      break;
+    }
+    visited.add(publicID);
+    next[toBranchKey(current.parentPublicID)] = publicID;
+
+    const parentPublicID = current.parentPublicID?.trim() || "";
+    current = parentPublicID ? messagesByPublicID.get(parentPublicID) ?? null : null;
+  }
+
   for (const [parentKey, siblings] of children.entries()) {
     const existing = previous[parentKey];
     if (existing && siblings.some((item) => item.publicID === existing)) {
       next[parentKey] = existing;
+      continue;
+    }
+    if (next[parentKey]) {
       continue;
     }
     const latest = siblings[siblings.length - 1];
@@ -338,7 +305,8 @@ export function buildVisibleMessages(
   selections: Record<string, string>,
 ): ChatAreaMessage[] {
   const children = buildChildrenIndex(messages);
-  const visible: ChatAreaMessage[] = [];
+  const reconciledSelections = reconcileBranchSelections(messages, selections);
+  let visible: ChatAreaMessage[] = [];
   const visited = new Set<string>();
   let parentKey = ROOT_BRANCH_KEY;
 
@@ -348,7 +316,7 @@ export function buildVisibleMessages(
       break;
     }
 
-    const selectedPublicID = selections[parentKey] || siblings[siblings.length - 1]?.publicID;
+    const selectedPublicID = reconciledSelections[parentKey] || siblings[siblings.length - 1]?.publicID;
     const selected = siblings.find((item) => item.publicID === selectedPublicID) ?? siblings[siblings.length - 1];
     if (!selected || visited.has(selected.publicID)) {
       break;
@@ -359,8 +327,12 @@ export function buildVisibleMessages(
     parentKey = selected.publicID;
   }
 
-  const withUserNavigators = visible.map((item) => {
-    if (item.role !== "user") {
+  if (visible.length === 0 && messages.length > 0) {
+    visible = buildTailVisibleMessages(messages);
+  }
+
+  const withBranchNavigators = visible.map((item) => {
+    if (item.role !== "user" && item.role !== "assistant") {
       return item;
     }
     const siblings = children.get(toBranchKey(item.parentPublicID)) ?? [];
@@ -383,11 +355,11 @@ export function buildVisibleMessages(
     };
   });
 
-  return withUserNavigators.map((item, index) => {
+  return withBranchNavigators.map((item, index) => {
     if (item.role !== "assistant") {
       return item;
     }
-    const previous = index > 0 ? withUserNavigators[index - 1] : null;
+    const previous = index > 0 ? withBranchNavigators[index - 1] : null;
     if (!previous || previous.role !== "user") {
       return item;
     }
@@ -396,7 +368,22 @@ export function buildVisibleMessages(
       inputTokens: item.inputTokens && item.inputTokens > 0 ? item.inputTokens : previous.inputTokens,
       cacheReadTokens: item.cacheReadTokens && item.cacheReadTokens > 0 ? item.cacheReadTokens : previous.cacheReadTokens,
       cacheWriteTokens: item.cacheWriteTokens && item.cacheWriteTokens > 0 ? item.cacheWriteTokens : previous.cacheWriteTokens,
-      branchNavigator: previous.branchNavigator ?? item.branchNavigator,
     };
   });
+}
+
+function buildTailVisibleMessages(messages: ChatAreaMessage[]): ChatAreaMessage[] {
+  const byPublicID = new Map(messages.map((item) => [item.publicID, item]));
+  const visible: ChatAreaMessage[] = [];
+  const visited = new Set<string>();
+  let current = messages.at(-1) ?? null;
+
+  while (current && !visited.has(current.publicID)) {
+    visited.add(current.publicID);
+    visible.push(current);
+    const parentPublicID = current.parentPublicID?.trim() || "";
+    current = parentPublicID ? byPublicID.get(parentPublicID) ?? null : null;
+  }
+
+  return visible.reverse();
 }

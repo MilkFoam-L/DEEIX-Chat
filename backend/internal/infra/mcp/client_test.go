@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -203,5 +204,34 @@ func TestClientListToolsParsesSSEJSONRPC(t *testing.T) {
 	}
 	if len(tools) != 1 || tools[0].Name != "memory.list" || tools[0].Description != "List memories" {
 		t.Fatalf("unexpected tools: %#v", tools)
+	}
+}
+
+func TestParseRPCResponseParsesLargeSingleLineSSEData(t *testing.T) {
+	toolDescription := strings.Repeat("x", 70*1024)
+	payload := `event: message
+data: {"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"memory.list","description":"` + toolDescription + `"}]}}
+
+`
+
+	result, err := parseRPCResponse("text/event-stream", []byte(payload))
+	if err != nil {
+		t.Fatalf("parse rpc response: %v", err)
+	}
+
+	var parsed struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(parsed.Tools) != 1 || parsed.Tools[0].Name != "memory.list" {
+		t.Fatalf("unexpected tools: %#v", parsed.Tools)
+	}
+	if parsed.Tools[0].Description != toolDescription {
+		t.Fatalf("unexpected tool description length: got %d want %d", len(parsed.Tools[0].Description), len(toolDescription))
 	}
 }

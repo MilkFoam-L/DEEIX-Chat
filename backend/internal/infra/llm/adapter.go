@@ -9,16 +9,19 @@ import (
 
 // 已支持的协议常量。每个协议固定对应一个 HTTP 端点，任务能力由模型类别和路由规则约束。
 const (
-	AdapterOpenAIResponses        = "openai_responses"         // POST /v1/responses
-	AdapterOpenAIChatCompletions  = "openai_chat_completions"  // POST /v1/chat/completions
-	AdapterOpenAIImageGenerations = "openai_image_generations" // POST /v1/images/generations
-	AdapterOpenAIImageEdits       = "openai_image_edits"       // POST /v1/images/edits
-	AdapterAnthropicMessages      = "anthropic_messages"       // POST /v1/messages
-	AdapterGoogleGenerateContent  = "google_generate_content"  // POST /v1beta/models/{model}:generateContent
-	AdapterGoogleImageGeneration  = "google_image_generation"  // POST /v1beta/models/{model}:generateContent
-	AdapterXAIResponses           = "xai_responses"            // POST /v1/responses（OpenAI 兼容）
-	AdapterXAIImage               = "xai_image"                // POST /v1/images/generations
-	AdapterXAIImageEdits          = "xai_image_edits"          // POST /v1/images/edits
+	AdapterOpenAIResponses        = "openai_responses"            // POST /v1/responses
+	AdapterOpenRouterChat         = "openrouter_chat_completions" // POST /v1/chat/completions（OpenRouter）
+	AdapterOpenRouterResponses    = "openrouter_responses"        // POST /v1/responses（OpenRouter Responses Beta）
+	AdapterOpenAIChatCompletions  = "openai_chat_completions"     // POST /v1/chat/completions
+	AdapterOpenAIImageGenerations = "openai_image_generations"    // POST /v1/images/generations
+	AdapterOpenAIImageEdits       = "openai_image_edits"          // POST /v1/images/edits
+	AdapterAnthropicMessages      = "anthropic_messages"          // POST /v1/messages
+	AdapterGoogleGenerateContent  = "google_generate_content"     // POST /v1beta/models/{model}:generateContent
+	AdapterGoogleImageGeneration  = "google_image_generation"     // POST /v1beta/models/{model}:generateContent
+	AdapterGeminiInteractions     = "gemini_interactions"         // POST /v1beta/interactions
+	AdapterXAIResponses           = "xai_responses"               // POST /v1/responses（OpenAI 兼容）
+	AdapterXAIImage               = "xai_image"                   // POST /v1/images/generations
+	AdapterXAIImageEdits          = "xai_image_edits"             // POST /v1/images/edits
 )
 
 var (
@@ -35,7 +38,7 @@ type transportAdapter interface {
 	ListModels(ctx context.Context, route RouteConfig) ([]ModelItem, error)
 }
 
-// NormalizeAdapter 规范化协议名，未知值默认返回 openai_responses。
+// NormalizeAdapter 规范化协议名；空值按历史默认使用 openai_responses，未知值保留给校验层处理。
 func NormalizeAdapter(raw string) string {
 	value := strings.TrimSpace(strings.ToLower(raw))
 	if value == "" {
@@ -48,12 +51,15 @@ func NormalizeAdapter(raw string) string {
 func IsKnownAdapter(raw string) bool {
 	switch NormalizeAdapter(raw) {
 	case AdapterOpenAIResponses,
+		AdapterOpenRouterChat,
+		AdapterOpenRouterResponses,
 		AdapterOpenAIChatCompletions,
 		AdapterOpenAIImageGenerations,
 		AdapterOpenAIImageEdits,
 		AdapterAnthropicMessages,
 		AdapterGoogleGenerateContent,
 		AdapterGoogleImageGeneration,
+		AdapterGeminiInteractions,
 		AdapterXAIResponses,
 		AdapterXAIImage,
 		AdapterXAIImageEdits:
@@ -66,8 +72,8 @@ func IsKnownAdapter(raw string) bool {
 // IsImplementedAdapter 返回协议是否已有可用的传输层实现。
 func IsImplementedAdapter(raw string) bool {
 	switch NormalizeAdapter(raw) {
-	case AdapterOpenAIResponses, AdapterOpenAIChatCompletions, AdapterOpenAIImageGenerations, AdapterOpenAIImageEdits, AdapterXAIResponses,
-		AdapterAnthropicMessages, AdapterGoogleGenerateContent, AdapterGoogleImageGeneration, AdapterXAIImage, AdapterXAIImageEdits:
+	case AdapterOpenAIResponses, AdapterOpenRouterChat, AdapterOpenRouterResponses, AdapterOpenAIChatCompletions, AdapterOpenAIImageGenerations, AdapterOpenAIImageEdits, AdapterXAIResponses,
+		AdapterAnthropicMessages, AdapterGoogleGenerateContent, AdapterGoogleImageGeneration, AdapterGeminiInteractions, AdapterXAIImage, AdapterXAIImageEdits:
 		return true
 	default:
 		return false
@@ -78,12 +84,15 @@ func IsImplementedAdapter(raw string) bool {
 func SupportsStreamingAdapter(raw string) bool {
 	switch NormalizeAdapter(raw) {
 	case AdapterOpenAIResponses,
+		AdapterOpenRouterChat,
+		AdapterOpenRouterResponses,
 		AdapterOpenAIChatCompletions,
 		AdapterOpenAIImageGenerations,
 		AdapterOpenAIImageEdits,
 		AdapterAnthropicMessages,
 		AdapterGoogleGenerateContent,
 		AdapterGoogleImageGeneration,
+		AdapterGeminiInteractions,
 		AdapterXAIResponses:
 		return true
 	default:
@@ -98,6 +107,8 @@ func SupportsImageGenerationStream(protocol string, model string) bool {
 		return openAIImageGenerationModelSupportsStream(model)
 	case AdapterGoogleImageGeneration:
 		return true
+	case AdapterGeminiInteractions:
+		return true
 	case AdapterOpenAIImageEdits:
 		return openAIImageEditModelSupportsStream(model)
 	default:
@@ -108,7 +119,7 @@ func SupportsImageGenerationStream(protocol string, model string) bool {
 // IsImageGenerationAdapter 返回协议是否属于独立图片生成链路。
 func IsImageGenerationAdapter(raw string) bool {
 	switch NormalizeAdapter(raw) {
-	case AdapterOpenAIImageGenerations, AdapterGoogleImageGeneration, AdapterXAIImage:
+	case AdapterOpenAIImageGenerations, AdapterGoogleImageGeneration, AdapterGeminiInteractions, AdapterXAIImage:
 		return true
 	default:
 		return false
@@ -118,24 +129,31 @@ func IsImageGenerationAdapter(raw string) bool {
 // IsImageEditAdapter 返回协议是否属于独立图片编辑链路。
 func IsImageEditAdapter(raw string) bool {
 	switch NormalizeAdapter(raw) {
-	case AdapterOpenAIImageEdits, AdapterGoogleImageGeneration, AdapterXAIImageEdits:
+	case AdapterOpenAIImageEdits, AdapterGoogleImageGeneration, AdapterGeminiInteractions, AdapterXAIImageEdits:
 		return true
 	default:
 		return false
 	}
 }
 
+// IsVideoGenerationAdapter 返回协议是否属于独立视频生成链路。
+func IsVideoGenerationAdapter(raw string) bool {
+	return NormalizeAdapter(raw) == AdapterGeminiInteractions
+}
+
 // DefaultEndpointForAdapter 返回协议对应的固定端点标识。
 func DefaultEndpointForAdapter(adapter string) string {
 	switch NormalizeAdapter(adapter) {
-	case AdapterOpenAIChatCompletions:
+	case AdapterOpenAIChatCompletions, AdapterOpenRouterChat:
 		return EndpointChatCompletions
 	case AdapterOpenAIImageGenerations, AdapterGoogleImageGeneration, AdapterXAIImage:
 		return EndpointImageGenerations
 	case AdapterOpenAIImageEdits, AdapterXAIImageEdits:
 		return EndpointImageEdits
+	case AdapterGeminiInteractions:
+		return EndpointInteractions
 	default:
-		// openai_responses、xai_responses 及所有未知值均使用 Responses 端点。
+		// openai_responses、openrouter_responses、xai_responses 及所有未知值均使用 Responses 端点。
 		return EndpointResponses
 	}
 }

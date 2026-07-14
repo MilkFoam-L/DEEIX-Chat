@@ -67,6 +67,31 @@ func TestBuildChatCompletionsToolMessages(t *testing.T) {
 	}
 }
 
+func TestBuildOpenRouterChatCompletionsToolMessagesUsesReasoningField(t *testing.T) {
+	payload := mustBuildRequestBody(t, AdapterOpenRouterChat, "openai/gpt-oss-120b:free", EndpointChatCompletions, GenerateInput{
+		Messages: []Message{
+			{
+				Role:             "assistant",
+				ReasoningContent: "need live news",
+				ToolCalls:        []ToolCall{{ToolCallID: "call_1", ToolType: "function", ToolName: "search_web", ArgumentsJSON: `{"query":"today news China"}`}},
+			},
+			{Role: "tool", ToolResults: []ToolResult{{ToolCallID: "call_1", ToolName: "search_web", OutputJSON: `{"items":[]}`, Status: "success"}}},
+		},
+	}, false)
+
+	messages := payload["messages"].([]map[string]interface{})
+	assistant := messages[0]
+	if assistant["reasoning"] != "need live news" {
+		t.Fatalf("expected OpenRouter reasoning passback, got %#v", assistant)
+	}
+	if _, ok := assistant["reasoning_content"]; ok {
+		t.Fatalf("expected no DeepSeek reasoning_content alias for OpenRouter, got %#v", assistant)
+	}
+	if payload["stream"] != false {
+		t.Fatalf("expected chat completions request body, got %#v", payload)
+	}
+}
+
 func TestParseChatCompletionsOutputSeparatesReasoningContentParts(t *testing.T) {
 	result := &GenerateOutput{}
 	parseChatCompletionsOutput(AdapterOpenAIChatCompletions, map[string]interface{}{
@@ -90,7 +115,7 @@ func TestParseChatCompletionsOutputSeparatesReasoningContentParts(t *testing.T) 
 				},
 			},
 		},
-	}, result)
+	}, result, false)
 
 	if result.Text != "visible answer" {
 		t.Fatalf("expected only visible content, got %q", result.Text)
@@ -124,7 +149,7 @@ func TestApplyChatStreamEventSeparatesReasoningContentParts(t *testing.T) {
 			reasoning += event.Reasoning.Text
 		}
 		return nil
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("apply chat stream event: %v", err)
 	}
@@ -167,6 +192,26 @@ func TestBuildResponsesToolInputItems(t *testing.T) {
 	items := payload["input"].([]map[string]interface{})
 	if len(items) != 1 || items[0]["type"] != "function_call_output" || items[0]["call_id"] != "call_1" {
 		t.Fatalf("expected function_call_output item, got %#v", items)
+	}
+}
+
+func TestBuildOpenRouterResponsesToolHistoryAddsItemIDs(t *testing.T) {
+	payload := mustBuildRequestBody(t, AdapterOpenRouterResponses, "openai/o4-mini", EndpointResponses, GenerateInput{
+		Messages: []Message{
+			{Role: "assistant", ToolCalls: []ToolCall{{ToolCallID: "call_123", ToolName: "get_weather", ArgumentsJSON: `{"location":"Boston, MA"}`}}},
+			{Role: "tool", ToolResults: []ToolResult{{ToolCallID: "call_123", ToolName: "get_weather", OutputJSON: `{"temperature":"72F"}`, Status: "success"}}},
+		},
+	}, false)
+
+	items := payload["input"].([]map[string]interface{})
+	if len(items) != 2 {
+		t.Fatalf("expected two tool history items, got %#v", items)
+	}
+	if items[0]["type"] != "function_call" || items[0]["id"] == "" || items[0]["call_id"] != "call_123" {
+		t.Fatalf("expected function_call item id and call_id, got %#v", items[0])
+	}
+	if items[1]["type"] != "function_call_output" || items[1]["id"] == "" || items[1]["call_id"] != "call_123" {
+		t.Fatalf("expected function_call_output item id and call_id, got %#v", items[1])
 	}
 }
 
@@ -470,6 +515,90 @@ func TestBuildGeminiToolsMergesProviderAndMCPTools(t *testing.T) {
 	if declarations[0]["name"] != "bing_search" {
 		t.Fatalf("expected MCP tool third, got %#v", tools[2])
 	}
+	toolConfig := payload["toolConfig"].(map[string]interface{})
+	if toolConfig["includeServerSideToolInvocations"] != true {
+		t.Fatalf("expected Gemini server-side tool invocations to be included when mixed with function declarations, got %#v", toolConfig)
+	}
+}
+
+func TestBuildGeminiToolsPreservesExplicitToolConfigWhenMixedTools(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`)
+	payload := mustBuildGeminiRequestBody(t, GenerateInput{
+		Messages: []Message{{Role: "user", Content: "search"}},
+		Options: map[string]interface{}{
+			"web_search": true,
+			"toolConfig": map[string]interface{}{
+				"functionCallingConfig": map[string]interface{}{"mode": "ANY"},
+			},
+		},
+		Tools: []ToolDefinition{{
+			Name:        "search_web",
+			Description: "Search the web",
+			InputSchema: schema,
+		}},
+	})
+
+	toolConfig := payload["toolConfig"].(map[string]interface{})
+	if toolConfig["includeServerSideToolInvocations"] != true {
+		t.Fatalf("expected mixed tools to enable server-side invocations, got %#v", toolConfig)
+	}
+	if _, ok := toolConfig["functionCallingConfig"].(map[string]interface{}); !ok {
+		t.Fatalf("expected explicit functionCallingConfig to be preserved, got %#v", toolConfig)
+	}
+}
+
+func TestBuildGeminiToolsSanitizesJSONSchemaForFunctionDeclarations(t *testing.T) {
+	schema := json.RawMessage(`{
+		"$schema": "http://json-schema.org/draft-07/schema#",
+		"additionalProperties": false,
+		"type": "object",
+		"properties": {
+			"query": {
+				"anyOf": [
+					{"type": "string", "default": ""},
+					{"type": "array", "items": {"type": "string", "additionalProperties": false}}
+				],
+				"description": "Search terms"
+			},
+			"num": {
+				"type": "number",
+				"default": 30
+			}
+		},
+		"required": ["query"]
+	}`)
+	payload := mustBuildGeminiRequestBody(t, GenerateInput{
+		Messages: []Message{{Role: "user", Content: "search"}},
+		Tools: []ToolDefinition{{
+			Name:        "search_web",
+			Description: "Search the web",
+			InputSchema: schema,
+		}},
+	})
+
+	tools := payload["tools"].([]map[string]interface{})
+	declarations := tools[0]["functionDeclarations"].([]map[string]interface{})
+	parameters := declarations[0]["parameters"].(map[string]interface{})
+	if _, ok := parameters["$schema"]; ok {
+		t.Fatalf("expected $schema to be removed for Gemini, got %#v", parameters)
+	}
+	if _, ok := parameters["additionalProperties"]; ok {
+		t.Fatalf("expected additionalProperties to be removed for Gemini, got %#v", parameters)
+	}
+	properties := parameters["properties"].(map[string]interface{})
+	query := properties["query"].(map[string]interface{})
+	anyOf := query["anyOf"].([]interface{})
+	if _, ok := anyOf[0].(map[string]interface{})["default"]; ok {
+		t.Fatalf("expected nested default to be removed for Gemini, got %#v", anyOf[0])
+	}
+	arraySchema := anyOf[1].(map[string]interface{})
+	items := arraySchema["items"].(map[string]interface{})
+	if _, ok := items["additionalProperties"]; ok {
+		t.Fatalf("expected nested additionalProperties to be removed for Gemini, got %#v", items)
+	}
+	if parameters["type"] != "object" || len(parameters["required"].([]interface{})) != 1 {
+		t.Fatalf("expected supported schema fields to remain, got %#v", parameters)
+	}
 }
 
 func TestBuildGeminiRequestBodyDisableToolsRemovesProviderAndMCPTools(t *testing.T) {
@@ -552,7 +681,7 @@ func TestChatStreamToolCallArgumentsAreConcatenatedWithoutDefaultPrefix(t *testi
 	}
 
 	for _, chunk := range chunks {
-		if err := applyChatStreamEvent(AdapterOpenAIChatCompletions, chunk, result, nil); err != nil {
+		if err := applyChatStreamEvent(AdapterOpenAIChatCompletions, chunk, result, nil, false); err != nil {
 			t.Fatalf("apply stream event: %v", err)
 		}
 	}
@@ -609,7 +738,7 @@ func TestChatStreamCustomToolCallInputIsConcatenated(t *testing.T) {
 	}
 
 	for _, chunk := range chunks {
-		if err := applyChatStreamEvent(AdapterOpenAIChatCompletions, chunk, result, nil); err != nil {
+		if err := applyChatStreamEvent(AdapterOpenAIChatCompletions, chunk, result, nil, false); err != nil {
 			t.Fatalf("apply stream event: %v", err)
 		}
 	}
@@ -642,11 +771,187 @@ func TestParseChatCompletionsCustomToolCall(t *testing.T) {
 	}
 }
 
+func TestParseChatCompletionsDSMLToolCalls(t *testing.T) {
+	payload := mustDecodeObject(t, `{
+		"id": "chatcmpl_1",
+		"choices": [{
+			"message": {
+				"role": "assistant",
+				"content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"searchGitHub\">\n<｜DSML｜parameter name=\"query\" string=\"true\">默认启用MCP DEEIX</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>"
+			}
+		}]
+	}`)
+
+	result := buildGenerateOutputFromParsedForAdapter(EndpointChatCompletions, AdapterOpenAIChatCompletions, payload, true)
+	if result.Text != "" {
+		t.Fatalf("expected DSML envelope to be removed from visible text, got %q", result.Text)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("expected one parsed DSML tool call, got %#v", result.ToolCalls)
+	}
+	call := result.ToolCalls[0]
+	if call.ToolCallID != "dsml_call_1" || call.ToolType != "function" || call.ToolName != "searchGitHub" || call.Status != "requested" {
+		t.Fatalf("unexpected DSML tool call: %#v", call)
+	}
+	if call.ArgumentsJSON != `{"query":"默认启用MCP DEEIX"}` {
+		t.Fatalf("unexpected DSML arguments: %q", call.ArgumentsJSON)
+	}
+}
+
+func TestParseChatCompletionsDSMLToolCallsDecodesJSONParameters(t *testing.T) {
+	payload := mustDecodeObject(t, `{
+		"id": "chatcmpl_1",
+		"choices": [{
+			"message": {
+				"role": "assistant",
+				"content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"searchGitHub\">\n<｜DSML｜parameter name=\"query\" string=\"true\">DEEIX</｜DSML｜parameter>\n<｜DSML｜parameter name=\"limit\" string=\"false\">3</｜DSML｜parameter>\n<｜DSML｜parameter name=\"filters\" string=\"false\">{\"language\":\"Go\"}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>"
+			}
+		}]
+	}`)
+
+	result := buildGenerateOutputFromParsedForAdapter(EndpointChatCompletions, AdapterOpenAIChatCompletions, payload, true)
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("expected one parsed DSML tool call, got %#v", result.ToolCalls)
+	}
+	if result.ToolCalls[0].ArgumentsJSON != `{"filters":{"language":"Go"},"limit":3,"query":"DEEIX"}` {
+		t.Fatalf("unexpected DSML arguments: %q", result.ToolCalls[0].ArgumentsJSON)
+	}
+}
+
+func TestParseChatCompletionsDSMLToolCallsDisabledByDefault(t *testing.T) {
+	payload := mustDecodeObject(t, `{
+		"id": "chatcmpl_1",
+		"choices": [{
+			"message": {
+				"role": "assistant",
+				"content": "<｜DSML｜tool_calls><｜DSML｜invoke name=\"searchGitHub\"><｜DSML｜parameter name=\"query\" string=\"true\">DEEIX</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>"
+			}
+		}]
+	}`)
+
+	result := buildGenerateOutputFromParsed(EndpointChatCompletions, payload)
+	if !strings.Contains(result.Text, "DSML") {
+		t.Fatalf("expected default chat completions path to keep DSML as text, got %q", result.Text)
+	}
+	if len(result.ToolCalls) != 0 {
+		t.Fatalf("expected default chat completions path not to parse DSML tool calls, got %#v", result.ToolCalls)
+	}
+}
+
+func TestTextEncodedToolCallsOnlyEnabledForDeepSeekChatCompletions(t *testing.T) {
+	if !deepSeekTextEncodedToolCallsEnabled(RouteConfig{
+		Protocol:      AdapterOpenAIChatCompletions,
+		UpstreamModel: "deepseek-v4-flash",
+	}) {
+		t.Fatalf("expected DeepSeek chat completions route to enable text-encoded tool calls")
+	}
+	if deepSeekTextEncodedToolCallsEnabled(RouteConfig{
+		Protocol:      AdapterOpenAIChatCompletions,
+		UpstreamModel: "gpt-5.4",
+	}) {
+		t.Fatalf("expected non-DeepSeek chat completions route to keep text-encoded tool calls disabled")
+	}
+	if deepSeekTextEncodedToolCallsEnabled(RouteConfig{
+		Protocol:      AdapterOpenAIResponses,
+		UpstreamModel: "deepseek-v4-flash",
+	}) {
+		t.Fatalf("expected non-chat-completions route to keep text-encoded tool calls disabled")
+	}
+}
+
+func TestConsumeChatStreamDSMLToolCallsAreNotEmittedAsText(t *testing.T) {
+	rawStream := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","choices":[{"delta":{"content":"<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"searchGitHub\">\n"}}]}`,
+		`data: {"id":"chatcmpl_1","choices":[{"delta":{"content":"<｜DSML｜parameter name=\"query\" string=\"true\">DEEIX MCP</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>"}}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+	result := &GenerateOutput{ToolCalls: make([]ToolCall, 0)}
+	var deltas []string
+
+	err := consumeOpenAIGenerateStream(EndpointChatCompletions, AdapterOpenAIChatCompletions, strings.NewReader(rawStream), result, func(event GenerateStreamEvent) error {
+		if event.Delta != "" {
+			deltas = append(deltas, event.Delta)
+		}
+		return nil
+	}, true)
+	if err != nil {
+		t.Fatalf("consume stream: %v", err)
+	}
+	if len(deltas) != 0 || result.Text != "" {
+		t.Fatalf("expected DSML stream to stay out of visible text, deltas=%#v text=%q", deltas, result.Text)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != "searchGitHub" || result.ToolCalls[0].ArgumentsJSON != `{"query":"DEEIX MCP"}` {
+		t.Fatalf("unexpected DSML stream tool calls: %#v", result.ToolCalls)
+	}
+}
+
+func TestConsumeChatStreamIncompleteDSMLToolCallsReturnsError(t *testing.T) {
+	rawStream := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","choices":[{"delta":{"content":"<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"searchGitHub\">\n"}}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+	result := &GenerateOutput{ToolCalls: make([]ToolCall, 0)}
+
+	err := consumeOpenAIGenerateStream(EndpointChatCompletions, AdapterOpenAIChatCompletions, strings.NewReader(rawStream), result, nil, true)
+	if !errors.Is(err, errDeepSeekDSMLToolCallsIncomplete) {
+		t.Fatalf("expected incomplete DSML error, got %v", err)
+	}
+	if result.Text != "" || len(result.ToolCalls) != 0 {
+		t.Fatalf("expected incomplete DSML to stay out of output, text=%q toolCalls=%#v", result.Text, result.ToolCalls)
+	}
+}
+
+func TestParseOpenAIGenerateOutputIncompleteDSMLToolCallsReturnsError(t *testing.T) {
+	body := []byte(`{
+		"id": "chatcmpl_1",
+		"choices": [{
+			"message": {
+				"role": "assistant",
+				"content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"searchGitHub\">"
+			}
+		}]
+	}`)
+
+	_, err := parseOpenAIGenerateOutput(EndpointChatCompletions, AdapterOpenAIChatCompletions, body, true)
+	if !errors.Is(err, errDeepSeekDSMLToolCallsIncomplete) {
+		t.Fatalf("expected incomplete DSML error, got %v", err)
+	}
+}
+
+func TestConsumeChatStreamAngleBracketTextStillEmits(t *testing.T) {
+	rawStream := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","choices":[{"delta":{"content":"<"}}]}`,
+		`data: {"id":"chatcmpl_1","choices":[{"delta":{"content":"not-dsml> ok"}}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+	result := &GenerateOutput{ToolCalls: make([]ToolCall, 0)}
+	var deltas []string
+
+	err := consumeOpenAIGenerateStream(EndpointChatCompletions, AdapterOpenAIChatCompletions, strings.NewReader(rawStream), result, func(event GenerateStreamEvent) error {
+		if event.Delta != "" {
+			deltas = append(deltas, event.Delta)
+		}
+		return nil
+	}, true)
+	if err != nil {
+		t.Fatalf("consume stream: %v", err)
+	}
+	if got := strings.Join(deltas, ""); got != "<not-dsml> ok" || result.Text != got {
+		t.Fatalf("expected ordinary angle bracket text to stream, deltas=%#v text=%q", deltas, result.Text)
+	}
+	if len(result.ToolCalls) != 0 {
+		t.Fatalf("expected no tool calls, got %#v", result.ToolCalls)
+	}
+}
+
 func TestConsumeChatStreamErrorPayloadReturnsUpstreamError(t *testing.T) {
 	result := &GenerateOutput{ToolCalls: make([]ToolCall, 0)}
 	stream := bytes.NewBufferString("data: {\"error\":{\"message\":\"Param Incorrect\",\"code\":400}}\n\n")
 
-	err := consumeOpenAIGenerateStream(EndpointChatCompletions, AdapterOpenAIChatCompletions, stream, result, nil)
+	err := consumeOpenAIGenerateStream(EndpointChatCompletions, AdapterOpenAIChatCompletions, stream, result, nil, false)
 	var upstreamErr *UpstreamError
 	if !errors.As(err, &upstreamErr) {
 		t.Fatalf("expected upstream error, got %T %v", err, err)
@@ -734,7 +1039,7 @@ func TestStreamDebugSnapshotPreservesRawSSEBody(t *testing.T) {
 	rawStream := "event: response.error\ndata: {\"type\":\"response.error\",\"error\":{\"message\":\"Argument not supported: metadata\"}}\n\n"
 	recorder := newUpstreamBodyRecorder(bytes.NewBufferString(rawStream))
 
-	err := consumeOpenAIGenerateStream(EndpointResponses, AdapterXAIResponses, recorder, result, nil)
+	err := consumeOpenAIGenerateStream(EndpointResponses, AdapterXAIResponses, recorder, result, nil, false)
 	req, reqErr := http.NewRequest(http.MethodPost, "https://api.x.ai/v1/responses", strings.NewReader(`{"model":"grok-4.3"}`))
 	if reqErr != nil {
 		t.Fatal(reqErr)
@@ -767,7 +1072,7 @@ func TestResponsesStreamReasoningSummaryDeltaIsEmittedAndStored(t *testing.T) {
 			reasoningText += event.Reasoning.Text
 		}
 		return nil
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("consume stream: %v", err)
 	}
@@ -793,7 +1098,7 @@ func TestResponsesCompletedReasoningSummaryIsEmittedWhenNoDeltaArrived(t *testin
 			reasoningText += event.Reasoning.Text
 		}
 		return nil
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("consume stream: %v", err)
 	}
@@ -822,7 +1127,7 @@ func TestResponsesStreamDoneEventsAreMergedWithoutDuplicateText(t *testing.T) {
 		``,
 	}, "\n")
 
-	if err := consumeOpenAIGenerateStream(EndpointResponses, AdapterOpenAIResponses, strings.NewReader(rawStream), result, nil); err != nil {
+	if err := consumeOpenAIGenerateStream(EndpointResponses, AdapterOpenAIResponses, strings.NewReader(rawStream), result, nil, false); err != nil {
 		t.Fatalf("consume stream: %v", err)
 	}
 	if result.Text != "Hello" {
@@ -978,6 +1283,110 @@ func TestParseResponsesCapturesOpenAINativeShellAndImageTools(t *testing.T) {
 	}
 }
 
+func TestParseResponsesCapturesGeneratedImageWithoutBase64Trace(t *testing.T) {
+	payload := mustDecodeObject(t, `{
+		"id": "resp_1",
+		"output": [
+			{
+				"type":"image_generation_call",
+				"id":"img_1",
+				"status":"completed",
+				"output_format":"png",
+				"revised_prompt":"A dog running",
+				"result":"ZmluYWw="
+			}
+		]
+	}`)
+
+	result := buildGenerateOutputFromParsed(EndpointResponses, payload)
+	if len(result.GeneratedImages) != 1 {
+		t.Fatalf("expected one generated image, got %#v", result.GeneratedImages)
+	}
+	image := result.GeneratedImages[0]
+	if image.B64JSON != "ZmluYWw=" || image.MIMEType != "image/png" || image.RevisedPrompt != "A dog running" {
+		t.Fatalf("unexpected generated image: %#v", image)
+	}
+	if len(result.ServerToolCalls) != 1 {
+		t.Fatalf("expected one image tool trace, got %#v", result.ServerToolCalls)
+	}
+	outputJSON := result.ServerToolCalls[0].OutputJSON
+	if strings.Contains(outputJSON, "ZmluYWw=") {
+		t.Fatalf("expected image base64 to be excluded from tool trace, got %q", outputJSON)
+	}
+	if !strings.Contains(outputJSON, `"image_generated":true`) {
+		t.Fatalf("expected generated image metadata in tool trace, got %q", outputJSON)
+	}
+}
+
+func TestResponsesStreamAcceptsLargePartialImageAndKeepsOnlyFinalImage(t *testing.T) {
+	partial := strings.Repeat("A", 2*1024*1024)
+	partialPayload, err := json.Marshal(map[string]interface{}{
+		"type":                "response.image_generation_call.partial_image",
+		"item_id":             "img_1",
+		"output_format":       "png",
+		"output_index":        0,
+		"partial_image_index": 3,
+		"partial_image_b64":   partial,
+	})
+	if err != nil {
+		t.Fatalf("marshal partial image event: %v", err)
+	}
+	completedPayload, err := json.Marshal(map[string]interface{}{
+		"type": "response.completed",
+		"response": map[string]interface{}{
+			"id": "resp_1",
+			"output": []interface{}{
+				map[string]interface{}{
+					"type":          "image_generation_call",
+					"id":            "img_1",
+					"status":        "completed",
+					"output_format": "png",
+					"result":        "ZmluYWw=",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal completed event: %v", err)
+	}
+	rawStream := strings.Join([]string{
+		"event: response.image_generation_call.partial_image",
+		"data: " + string(partialPayload),
+		"",
+		"event: response.completed",
+		"data: " + string(completedPayload),
+		"",
+	}, "\n")
+
+	result := &GenerateOutput{ToolCalls: make([]ToolCall, 0), ServerToolCalls: make([]ToolCall, 0)}
+	partialEvents := 0
+	err = consumeOpenAIGenerateStream(EndpointResponses, AdapterOpenAIResponses, strings.NewReader(rawStream), result, func(event GenerateStreamEvent) error {
+		if event.GeneratedImage == nil {
+			return nil
+		}
+		partialEvents++
+		if !event.GeneratedImagePartial || event.GeneratedImageIndex != 3 {
+			t.Fatalf("unexpected partial image event metadata: %#v", event)
+		}
+		if event.GeneratedImage.B64JSON != partial || event.GeneratedImage.MIMEType != "image/png" {
+			t.Fatalf("unexpected partial image event: %#v", event.GeneratedImage)
+		}
+		return nil
+	}, false)
+	if err != nil {
+		t.Fatalf("consume large image stream: %v", err)
+	}
+	if partialEvents != 1 {
+		t.Fatalf("expected one partial image event, got %d", partialEvents)
+	}
+	if len(result.GeneratedImages) != 1 || result.GeneratedImages[0].B64JSON != "ZmluYWw=" {
+		t.Fatalf("expected only the final image to be persisted, got %#v", result.GeneratedImages)
+	}
+	if len(result.ServerToolCalls) != 1 || strings.Contains(result.ServerToolCalls[0].OutputJSON, "ZmluYWw=") {
+		t.Fatalf("expected sanitized final image tool trace, got %#v", result.ServerToolCalls)
+	}
+}
+
 func TestParseResponsesTreatsXSearchCustomCallsAsServerSide(t *testing.T) {
 	payload := mustDecodeObject(t, `{
 		"id": "resp_1",
@@ -1116,7 +1525,7 @@ func TestResponsesOutputItemDoneCapturesServerSideToolCall(t *testing.T) {
 		``,
 	}, "\n")
 
-	err := consumeOpenAIGenerateStream(EndpointResponses, AdapterOpenAIResponses, strings.NewReader(rawStream), result, nil)
+	err := consumeOpenAIGenerateStream(EndpointResponses, AdapterOpenAIResponses, strings.NewReader(rawStream), result, nil, false)
 	if err != nil {
 		t.Fatalf("consume stream: %v", err)
 	}
@@ -1148,7 +1557,7 @@ func TestResponsesStreamEmitsServerSideToolStatusEvents(t *testing.T) {
 			statuses = append(statuses, event.ServerToolCall.Status)
 		}
 		return nil
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("consume stream: %v", err)
 	}
@@ -1171,7 +1580,7 @@ func TestResponsesServerToolFinalItemReplacesStreamingPlaceholder(t *testing.T) 
 		``,
 	}, "\n")
 
-	if err := consumeOpenAIGenerateStream(EndpointResponses, AdapterOpenAIResponses, strings.NewReader(rawStream), result, nil); err != nil {
+	if err := consumeOpenAIGenerateStream(EndpointResponses, AdapterOpenAIResponses, strings.NewReader(rawStream), result, nil, false); err != nil {
 		t.Fatalf("consume stream: %v", err)
 	}
 	if len(result.ServerToolCalls) != 1 {
@@ -1198,7 +1607,7 @@ func TestResponsesStreamStatusEventCapturesNestedServerToolItem(t *testing.T) {
 			streamed = &value
 		}
 		return nil
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("consume stream: %v", err)
 	}
@@ -1233,7 +1642,7 @@ func TestResponsesStreamCapturesXSearchCustomToolInput(t *testing.T) {
 			events = append(events, *event.ServerToolCall)
 		}
 		return nil
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("consume stream: %v", err)
 	}
@@ -1498,5 +1907,20 @@ func TestBuildGeminiToolParts(t *testing.T) {
 	response := parts[0]["functionResponse"].(map[string]interface{})
 	if response["name"] != "memory.list" {
 		t.Fatalf("expected gemini functionResponse name, got %#v", response)
+	}
+}
+
+func TestBuildGeminiToolCallPartsPreserveThoughtSignature(t *testing.T) {
+	parts := buildGeminiParts(Message{
+		Role: "assistant",
+		ToolCalls: []ToolCall{{
+			ToolName:         "search_web",
+			ArgumentsJSON:    `{"query":"SpaceX stock price"}`,
+			ThoughtSignature: "thought-signature-1",
+		}},
+	})
+
+	if parts[0]["thoughtSignature"] != "thought-signature-1" {
+		t.Fatalf("expected thoughtSignature on Gemini functionCall part, got %#v", parts[0])
 	}
 }

@@ -1,4 +1,14 @@
 {
+  "admin": {
+    "defaultPermissionGroupDeleteNotAllowed": "默认权限组不可删除。",
+    "permissionGroupNotFound": "权限组不存在。",
+    "invalidPermissionGroupName": "权限组名称不能为空。",
+    "invalidPermissionGroupRateMultiplier": "计费倍率无效，范围 1-10000。",
+    "invalidPermissionGroupModels": "权限组模型配置无效。",
+    "invalidPermissionGroupUsers": "权限组成员配置无效。",
+    "defaultPermissionGroupUsersImplicit": "默认权限组成员由系统自动维护。",
+    "permissionGroupReferencedByPlan": "该权限组已被计费套餐引用，请先解除绑定再删除。"
+  },
   "auth": {
     "adminRequired": "需要管理员权限。",
     "authorizationCodeRequired": "缺少授权码。",
@@ -24,6 +34,7 @@
     "oauthIntentMismatch": "第三方登录流程不匹配，请重新操作。",
     "oauthStateExpired": "第三方登录状态已过期，请重新登录。",
     "oauthStateInvalid": "第三方登录状态无效，请重新登录。",
+    "passwordResetFailed": "密码重置失败，请检查邮箱、验证码和新密码。",
     "passwordResetRequired": "请先完成密码重置。",
     "passwordReuseNotAllowed": "新密码不能与初始密码相同。",
     "providerAccountNotRegistered": "该第三方账号尚未注册。",
@@ -61,7 +72,7 @@
     "turnstileNotConfigured": "人机验证尚未配置完成。",
     "turnstileRequired": "请先完成人机验证。",
     "unauthorized": "登录状态已失效，请重新登录。",
-    "usernameChangeRequired": "请先完成用户名修改。",
+    "usernameChangeRequired": "请修改初始化用户名。",
     "verificationCodeAttemptsExceeded": "验证码尝试次数过多，请重新获取验证码。",
     "verificationCodeInvalid": "验证码无效或已过期。",
     "verificationCodeRecent": "验证码刚刚已发送，请稍后再试。"
@@ -69,6 +80,11 @@
   "billing": {
     "insufficientBalance": "余额不足。",
     "insufficientFunds": "余额不足。",
+    "concurrencyLimitExceeded": "最多同时运行 5 个付费请求。",
+    "reservationConflict": "该请求已提交，请勿重复发送。",
+    "invalidPlan": "计费套餐无效。",
+    "planNotFound": "计费套餐不存在。",
+    "invalidPermissionGroup": "权限组无效。",
     "invalidDailyUsageDateRange": "用量日期范围无效。",
     "invalidDailyUsageDays": "用量天数无效。",
     "invalidModelPricing": "模型定价无效。",
@@ -107,6 +123,7 @@
   "conversation": {
     "invalidId": "对话 ID 无效。",
     "invalidTitle": "对话标题无效。",
+    "noTitleableContent": "当前对话没有可用于生成标题的内容。",
     "notFound": "对话不存在。"
   },
   "conversationRun": {
@@ -128,6 +145,7 @@
     "originForbidden": "当前来源不允许访问。"
   },
   "embedding": {
+    "serviceNotConfigured": "请先启用并配置 Embedding 服务。",
     "serviceUnavailable": "向量服务不可用。"
   },
   "file": {
@@ -137,6 +155,7 @@
     "invalidName": "文件名无效。",
     "invalidReference": "文件引用无效。",
     "invalidStream": "文件流无效。",
+    "inUse": "文件正在使用中，无法删除。",
     "notFound": "文件不存在。",
     "notReady": "文件尚未准备完成。",
     "required": "请选择文件。",
@@ -150,6 +169,9 @@
   "internal": {
     "error": "服务器内部错误，请稍后重试。"
   },
+  "toolRun": {
+    "finalAnswerMissing": "工具调用已到达运行上限，但模型没有生成最终回答。请重试或减少本次启用的工具。"
+  },
   "llm": {
     "apiKeysRequired": "API Keys 不能为空。",
     "emptyResponse": "模型返回了空响应。",
@@ -162,6 +184,7 @@
     "invalidRouteProtocolCombination": "当前协议组合不可用。同一绑定只能选择单个协议，或同时选择同一厂商的图像生成与图像编辑协议。",
     "systemPromptTooLong": "系统提示词不能超过 20000 个字符。",
     "invalidProtocolDefaultsConfig": "协议默认配置无效。",
+    "modelAccessDenied": "当前权限组无权使用此模型。",
     "modelRouteNotConfigured": "模型路由未配置。",
     "noActiveApiKey": "没有可用的 API Key。",
     "platformModelNameExists": "平台模型名称已存在。",

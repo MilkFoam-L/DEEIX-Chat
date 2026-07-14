@@ -1,6 +1,7 @@
 import type {
   ChatInlineAlert,
   ImageLoadingAspectRatio,
+  MessageAttachment,
   ChatMessageProcessTrace,
 } from "@/features/chat/types/messages";
 import type { ConversationOptions } from "@/shared/api/conversation.types";
@@ -20,6 +21,7 @@ export type ChatModelOption = {
   protocols: string[];
   defaultOptions: ConversationOptions;
   optionControls: ModelOptionControl[];
+  lockedOptionPaths: string[];
   nativeToolKeys: string[];
   nativeTools: ModelNativeToolConfig[];
   pricing: PublicModelPricingDTO | null;
@@ -34,6 +36,7 @@ export type ModelOptionControl = {
   type?: ModelOptionControlType;
   options?: string[];
   placeholder?: string;
+  locked?: boolean;
 };
 
 export type PendingAttachment = {
@@ -74,6 +77,7 @@ export type PendingExchange = {
   parentPublicID: string | null;
   sourcePublicID: string | null;
   branchReason: "default" | "retry" | "edit";
+  reuseUserMessage: boolean;
   userContent: string;
   userAttachments?: PendingAttachment[];
   userServerMessageID?: number;
@@ -93,6 +97,7 @@ export type PendingExchange = {
   assistantCreatedAt: string;
   assistantUpdatedAt?: string;
   assistantContentType?: string;
+  assistantAttachments?: MessageAttachment[];
   assistantInputTokens?: number;
   assistantOutputTokens?: number;
   assistantCacheReadTokens?: number;
@@ -101,3 +106,5 @@ export type PendingExchange = {
   assistantLatencyMS?: number;
   compactDone?: { method: string; freed_tokens: number; summary_preview: string };
 };
+
+export type PendingExchangeMap = Record<string, PendingExchange>;

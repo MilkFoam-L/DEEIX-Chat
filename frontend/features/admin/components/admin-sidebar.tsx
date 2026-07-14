@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { CircleArrowUp } from "lucide-react";
 
@@ -17,15 +18,40 @@ import {
 } from "@/features/admin/model/update-check";
 import { cn } from "@/lib/utils";
 
+const ADMIN_SECTION_LABEL_KEYS: Record<AdminSection, string> = {
+  accounts: "sections.accounts",
+  upstreams: "sections.upstreams",
+  models: "sections.models",
+  groups: "sections.groups",
+  "tool-settings": "sections.toolSettings",
+  billing: "sections.billing",
+  announcements: "sections.announcements",
+  logs: "sections.logs",
+  "login-settings": "sections.loginSettings",
+  "conversation-settings": "sections.conversationSettings",
+  "chat-files": "sections.chatFiles",
+  about: "sections.about",
+};
+
+function resolveActiveSectionFromPath(pathname: string, basePath: string): AdminSection {
+  const normalizedBasePath = basePath.replace(/\/$/, "");
+  const section = ADMIN_SECTIONS.find((item) => {
+    const href = `${normalizedBasePath}${item.href}`;
+    return pathname === href || pathname.startsWith(`${href}/`);
+  });
+
+  return section?.id ?? "accounts";
+}
+
 export function AdminSidebar({
-  activeSection,
   basePath,
 }: {
-  activeSection: AdminSection;
   basePath: string;
 }) {
   const t = useTranslations("adminUsers");
   const tAbout = useTranslations("adminUsers.aboutPage");
+  const pathname = usePathname();
+  const activeSection = resolveActiveSectionFromPath(pathname, basePath);
   const activeLinkRef = React.useRef<HTMLAnchorElement | null>(null);
   const cachedLatestRelease = React.useSyncExternalStore(
     subscribeLatestReleaseChange,
@@ -35,20 +61,7 @@ export function AdminSidebar({
   const updateRelease = resolveAvailableRelease(packageMeta.version, cachedLatestRelease);
   const sectionLabel = React.useCallback(
     (id: AdminSection, fallback: string) => {
-      const keyByID: Record<AdminSection, string> = {
-        accounts: "sections.accounts",
-        channels: "sections.channels",
-        models: "sections.models",
-        "tool-settings": "sections.toolSettings",
-        billing: "sections.billing",
-        announcements: "sections.announcements",
-        logs: "sections.logs",
-        "login-settings": "sections.loginSettings",
-        "conversation-settings": "sections.conversationSettings",
-        "chat-files": "sections.chatFiles",
-        about: "sections.about",
-      };
-      return t(keyByID[id]) || fallback;
+      return t(ADMIN_SECTION_LABEL_KEYS[id]) || fallback;
     },
     [t],
   );

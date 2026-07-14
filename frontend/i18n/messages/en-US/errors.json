@@ -1,4 +1,14 @@
 {
+  "admin": {
+    "defaultPermissionGroupDeleteNotAllowed": "The default permission group cannot be deleted.",
+    "permissionGroupNotFound": "Permission group not found.",
+    "invalidPermissionGroupName": "Permission group name is required.",
+    "invalidPermissionGroupRateMultiplier": "Invalid rate multiplier. Must be between 1 and 10000.",
+    "invalidPermissionGroupModels": "Permission group model configuration is invalid.",
+    "invalidPermissionGroupUsers": "Permission group member configuration is invalid.",
+    "defaultPermissionGroupUsersImplicit": "Default permission group members are managed automatically.",
+    "permissionGroupReferencedByPlan": "This permission group is referenced by a billing plan. Unbind it before deleting."
+  },
   "auth": {
     "adminRequired": "Administrator permission is required.",
     "authorizationCodeRequired": "Authorization code is required.",
@@ -24,6 +34,7 @@
     "oauthIntentMismatch": "The OAuth flow does not match. Try again.",
     "oauthStateExpired": "The OAuth state expired. Sign in again.",
     "oauthStateInvalid": "Invalid OAuth state. Sign in again.",
+    "passwordResetFailed": "Password reset failed. Check your email, code, and new password.",
     "passwordResetRequired": "Password reset is required.",
     "passwordReuseNotAllowed": "The new password must be different from the bootstrap password.",
     "providerAccountNotRegistered": "This provider account is not registered.",
@@ -61,7 +72,7 @@
     "turnstileNotConfigured": "Human verification is not configured.",
     "turnstileRequired": "Complete the human verification first.",
     "unauthorized": "Your session has expired. Please sign in again.",
-    "usernameChangeRequired": "Username change is required.",
+    "usernameChangeRequired": "Change the initial username.",
     "verificationCodeAttemptsExceeded": "Too many verification attempts. Request a new code.",
     "verificationCodeInvalid": "Verification code is invalid or expired.",
     "verificationCodeRecent": "A verification code was sent recently. Try again later."
@@ -69,6 +80,11 @@
   "billing": {
     "insufficientBalance": "Insufficient balance.",
     "insufficientFunds": "Insufficient balance.",
+    "concurrencyLimitExceeded": "Up to 5 paid requests can run at the same time.",
+    "reservationConflict": "This request has already been submitted.",
+    "invalidPlan": "Invalid billing plan.",
+    "planNotFound": "Billing plan not found.",
+    "invalidPermissionGroup": "Invalid permission group.",
     "invalidDailyUsageDateRange": "Invalid usage date range.",
     "invalidDailyUsageDays": "Invalid usage day count.",
     "invalidModelPricing": "Invalid model pricing.",
@@ -107,6 +123,7 @@
   "conversation": {
     "invalidId": "Invalid conversation ID.",
     "invalidTitle": "Invalid conversation title.",
+    "noTitleableContent": "This conversation has no content that can be used to generate a title.",
     "notFound": "Conversation not found."
   },
   "conversationRun": {
@@ -128,6 +145,7 @@
     "originForbidden": "This origin is not allowed."
   },
   "embedding": {
+    "serviceNotConfigured": "Enable and configure the embedding service first.",
     "serviceUnavailable": "Embedding service is unavailable."
   },
   "file": {
@@ -137,6 +155,7 @@
     "invalidName": "Invalid file name.",
     "invalidReference": "Invalid file reference.",
     "invalidStream": "Invalid file stream.",
+    "inUse": "This file is in use and cannot be deleted.",
     "notFound": "File not found.",
     "notReady": "File is not ready.",
     "required": "File is required.",
@@ -150,6 +169,9 @@
   "internal": {
     "error": "Internal server error. Please try again later."
   },
+  "toolRun": {
+    "finalAnswerMissing": "The tool run reached its limit before the model produced a final answer. Retry or enable fewer tools for this message."
+  },
   "llm": {
     "apiKeysRequired": "API keys are required.",
     "emptyResponse": "The model returned an empty response.",
@@ -162,6 +184,7 @@
     "invalidRouteProtocolCombination": "This protocol combination is not available. A binding can use one protocol, or image generation and image editing protocols from the same provider.",
     "systemPromptTooLong": "System prompt must be at most 20000 characters.",
     "invalidProtocolDefaultsConfig": "Invalid protocol defaults configuration.",
+    "modelAccessDenied": "You do not have access to this model.",
     "modelRouteNotConfigured": "Model route is not configured.",
     "noActiveApiKey": "No active API key is available.",
     "platformModelNameExists": "Platform model name already exists.",

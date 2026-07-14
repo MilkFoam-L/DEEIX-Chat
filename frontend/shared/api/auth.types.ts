@@ -1,3 +1,11 @@
+export type UserIdentityProviderSummaryDTO = {
+  id: number;
+  type: string;
+  name: string;
+  slug: string;
+  logoURL: string;
+};
+
 export type UserDTO = {
   id: number;
   publicID: string;
@@ -29,6 +37,7 @@ export type UserDTO = {
   twoFactorRequired: boolean;
   twoFactorRecoveryCount: number;
   lastLoginAt: string | null;
+  lastActiveAt: string | null;
   createdAt: string;
   updatedAt: string;
   subscriptionTier: string;
@@ -40,6 +49,7 @@ export type UserDTO = {
   billingBalanceNanousd: number;
   billingBalanceUSD: number;
   billingAccountStatus: string;
+  identityProviders: UserIdentityProviderSummaryDTO[];
 };
 
 export type LoginData = {
@@ -84,6 +94,15 @@ export type EmailRegistrationStartData = {
   debugCode?: string;
 };
 
+export type PasswordResetStartData = {
+  sent: boolean;
+  expiresAt: string;
+};
+
+export type PasswordResetCompleteData = {
+  changed: boolean;
+};
+
 export type PasswordChangeVerificationStartData = {
   sent: boolean;
   expiresAt: string;
@@ -93,7 +112,6 @@ export type PasswordChangeVerificationStartData = {
 };
 
 export type LoginPageSettings = {
-  title: string;
   defaultNextPath: string;
   logoURL: string;
 };
@@ -151,6 +169,7 @@ export type LoginOptionsData = {
   emailEnabled: boolean;
   emailRegistrationEnabled: boolean;
   emailVerificationEnabled: boolean;
+  passwordResetEnabled: boolean;
   turnstileRegistrationEnabled: boolean;
   turnstileSiteKey: string;
   providers: IdentityProviderDTO[];

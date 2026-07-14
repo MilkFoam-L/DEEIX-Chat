@@ -68,6 +68,153 @@ func TestFilterModelOptionsAllowlistUsesDefaultAndProtocolPaths(t *testing.T) {
 	}
 }
 
+func TestFilterModelOptionsAllowsGeminiInteractionResponseFormatArray(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"response_format": []interface{}{
+			map[string]interface{}{"type": "text"},
+			map[string]interface{}{"type": "image", "image_size": "1K", "delivery": "b64_json"},
+		},
+	}, llm.AdapterGeminiInteractions, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+	})
+
+	formats, ok := filtered["response_format"].([]interface{})
+	if !ok || len(formats) != 2 {
+		t.Fatalf("expected Gemini Interactions response_format array to pass, got %#v", filtered)
+	}
+	imageFormat := formats[1].(map[string]interface{})
+	if imageFormat["image_size"] != "1K" {
+		t.Fatalf("expected whitelisted image_size to pass, got %#v", imageFormat)
+	}
+	if _, ok := imageFormat["delivery"]; ok {
+		t.Fatalf("expected non-whitelisted delivery to be filtered, got %#v", imageFormat)
+	}
+}
+
+func TestFilterModelOptionsAppliesCapabilityDefaultOptions(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"reasoning": map[string]interface{}{
+			"effort": "high",
+		},
+	}, llm.AdapterOpenAIResponses, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+		ModelCapabilitiesJSON: `{
+			"defaultOptions": {
+				"reasoning": {"effort": "medium", "summary": "auto"},
+				"text": {"verbosity": "low"},
+				"model": "blocked"
+			}
+		}`,
+	})
+
+	reasoning := filtered["reasoning"].(map[string]interface{})
+	if reasoning["effort"] != "high" || reasoning["summary"] != "auto" {
+		t.Fatalf("expected explicit option to override default and default summary to remain, got %#v", reasoning)
+	}
+	text := filtered["text"].(map[string]interface{})
+	if text["verbosity"] != "low" {
+		t.Fatalf("expected default text verbosity to pass, got %#v", filtered)
+	}
+	if _, ok := filtered["model"]; ok {
+		t.Fatalf("expected hard-denied default option to be removed, got %#v", filtered)
+	}
+}
+
+func TestFilterModelOptionsAppliesLockedCapabilityDefaultOptions(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"reasoning": map[string]interface{}{
+			"effort": "high",
+		},
+		"text": map[string]interface{}{
+			"verbosity": "high",
+		},
+	}, llm.AdapterOpenAIResponses, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+		ModelCapabilitiesJSON: `{
+			"defaultOptions": {
+				"reasoning": {"effort": "low"},
+				"text": {"verbosity": "low"},
+				"previous_response_id": "resp_blocked"
+			},
+			"lockedOptionPaths": ["reasoning.effort", "text.verbosity", "previous_response_id"]
+		}`,
+	})
+
+	reasoning := filtered["reasoning"].(map[string]interface{})
+	if reasoning["effort"] != "low" {
+		t.Fatalf("expected locked default reasoning effort to override explicit option, got %#v", reasoning)
+	}
+	text := filtered["text"].(map[string]interface{})
+	if text["verbosity"] != "low" {
+		t.Fatalf("expected locked default text verbosity to override explicit option, got %#v", text)
+	}
+	if _, ok := filtered["previous_response_id"]; ok {
+		t.Fatalf("expected hard-denied locked default option to be removed, got %#v", filtered)
+	}
+}
+
+func TestFilterModelOptionsOnlyInjectsDefaultToolsFromDefaultOptions(t *testing.T) {
+	allowedOnly := filterModelOptions(nil, llm.AdapterOpenAIResponses, modelOptionPolicyConfig{
+		Mode:                  modelOptionPolicyAllowlist,
+		AllowedPathsJSON:      config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:       config.DefaultModelOptionDeniedPathsJSON(),
+		ModelCapabilitiesJSON: `{"nativeToolKeys":["openai.web_search_preview"]}`,
+	})
+	if _, ok := allowedOnly["tools"]; ok {
+		t.Fatalf("expected nativeToolKeys to allow but not inject tools, got %#v", allowedOnly)
+	}
+
+	withDefault := filterModelOptions(nil, llm.AdapterOpenAIResponses, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+		ModelCapabilitiesJSON: `{
+			"defaultOptions": {
+				"tools": [{"type": "web_search_preview", "search_context_size": "low"}]
+			}
+		}`,
+	})
+	tools, ok := withDefault["tools"].([]map[string]interface{})
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected default tool to be injected through capability defaults, got %#v", withDefault)
+	}
+	if tools[0]["type"] != "web_search_preview" || tools[0]["search_context_size"] != "low" {
+		t.Fatalf("expected default tool parameters to pass, got %#v", tools[0])
+	}
+}
+
+func TestFilterModelOptionsInjectsLockedDefaultToolsThroughCapabilities(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"tools": []interface{}{
+			map[string]interface{}{"type": "web_search_preview", "search_context_size": "high"},
+		},
+	}, llm.AdapterOpenAIResponses, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+		ModelCapabilitiesJSON: `{
+			"defaultOptions": {
+				"tools": [{"type": "web_search_preview", "search_context_size": "low"}]
+			},
+			"lockedOptionPaths": ["tools"]
+		}`,
+	})
+
+	tools, ok := filtered["tools"].([]map[string]interface{})
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected locked default tool to be injected through capabilities, got %#v", filtered)
+	}
+	if tools[0]["type"] != "web_search_preview" || tools[0]["search_context_size"] != "low" {
+		t.Fatalf("expected locked default tool to override explicit tool parameters, got %#v", tools[0])
+	}
+}
+
 func TestFilterModelOptionsRejectsUnsupportedOpenAIServiceTier(t *testing.T) {
 	for _, serviceTier := range []string{"auto", "scale", "unknown"} {
 		t.Run(serviceTier, func(t *testing.T) {
@@ -87,6 +234,24 @@ func TestFilterModelOptionsRejectsUnsupportedOpenAIServiceTier(t *testing.T) {
 				t.Fatalf("expected other allowed options to remain, got %#v", filtered)
 			}
 		})
+	}
+}
+
+func TestFilterModelOptionsKeepsOpenRouterChatServiceTierOutOfDefaultAllowlist(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"service_tier":     "priority",
+		"reasoning_effort": "high",
+	}, llm.AdapterOpenRouterChat, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+	})
+
+	if _, ok := filtered["service_tier"]; ok {
+		t.Fatalf("expected OpenRouter Chat service_tier to stay outside the default allowlist, got %#v", filtered)
+	}
+	if filtered["reasoning_effort"] != "high" {
+		t.Fatalf("expected OpenRouter Chat reasoning_effort to pass, got %#v", filtered)
 	}
 }
 
@@ -771,6 +936,77 @@ func TestFilterModelOptionsOpenAIImageEditsAllowsEditParams(t *testing.T) {
 		if _, ok := filtered[key]; ok {
 			t.Fatalf("expected %s to be hard denied, got %#v", key, filtered)
 		}
+	}
+}
+
+func TestFilterModelOptionsGeminiInteractionsAllowsVideoParams(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"response_format": map[string]interface{}{
+			"aspect_ratio": "16:9",
+			"image_size":   "1K",
+			"mime_type":    "image/png",
+			"delivery":     "b64_json",
+		},
+		"generation_config": map[string]interface{}{
+			"temperature":    0.3,
+			"thinking_level": "low",
+			"video_config": map[string]interface{}{
+				"task": "image_to_video",
+			},
+		},
+		"model": "override",
+		"input": "override",
+	}, llm.AdapterGeminiInteractions, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+	})
+
+	responseFormat, ok := filtered["response_format"].(map[string]interface{})
+	if !ok || responseFormat["aspect_ratio"] != "16:9" || responseFormat["image_size"] != "1K" || responseFormat["mime_type"] != "image/png" {
+		t.Fatalf("expected Gemini response_format aspect ratio to pass, got %#v", filtered)
+	}
+	if _, ok := responseFormat["delivery"]; ok {
+		t.Fatalf("expected delivery override to be filtered, got %#v", responseFormat)
+	}
+	generationConfig, ok := filtered["generation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected Gemini generation_config to pass, got %#v", filtered)
+	}
+	videoConfig, ok := generationConfig["video_config"].(map[string]interface{})
+	if generationConfig["temperature"] != 0.3 || generationConfig["thinking_level"] != "low" {
+		t.Fatalf("expected Gemini generation config fields to pass, got %#v", generationConfig)
+	}
+	if !ok || videoConfig["task"] != "image_to_video" {
+		t.Fatalf("expected Gemini video task to pass, got %#v", filtered)
+	}
+	for _, key := range []string{"model", "input"} {
+		if _, ok := filtered[key]; ok {
+			t.Fatalf("expected %s override to be hard denied, got %#v", key, filtered)
+		}
+	}
+}
+
+func TestFilterModelOptionsGeminiInteractionsAllowsCamelCaseVideoConfig(t *testing.T) {
+	filtered := filterModelOptions(map[string]interface{}{
+		"generationConfig": map[string]interface{}{
+			"videoConfig": map[string]interface{}{
+				"task": "text_to_video",
+			},
+		},
+	}, llm.AdapterGeminiInteractions, modelOptionPolicyConfig{
+		Mode:             modelOptionPolicyAllowlist,
+		AllowedPathsJSON: config.DefaultModelOptionAllowedPathsJSON(),
+		DeniedPathsJSON:  config.DefaultModelOptionDeniedPathsJSON(),
+	})
+
+	generationConfig, ok := filtered["generationConfig"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected camelCase Gemini generationConfig to pass, got %#v", filtered)
+	}
+	videoConfig, ok := generationConfig["videoConfig"].(map[string]interface{})
+	if !ok || videoConfig["task"] != "text_to_video" {
+		t.Fatalf("expected camelCase Gemini video task to pass, got %#v", filtered)
 	}
 }
 

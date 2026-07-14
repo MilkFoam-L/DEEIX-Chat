@@ -9,19 +9,39 @@ import type {
   ResetAdminUserTwoFactorData,
   RevokeAdminUserSessionsData,
   UpdateAdminUserStatusRequest,
+  ImportOpenWebUIUsersData,
+  ImportOpenWebUIUsersRequest,
 } from "@/features/admin/api/admin.types";
 import type { PagePayload } from "@/shared/api/common.types";
 import type { UserDTO } from "@/shared/api/auth.types";
 
-import { normalizeAdminPagePayload, resolveAdminPage, type AdminPageOptions } from "./shared";
+import { normalizeAdminPagePayload, resolveAdminPage, type AdminListQueryOptions } from "./shared";
+
+type ListAdminUsersOptions = AdminListQueryOptions & {
+  subscriptionStatus?: string;
+  identityProvider?: string;
+};
 
 export async function listAdminUsers(
   accessToken: string,
-  options: AdminPageOptions = {},
+  options: ListAdminUsersOptions = {},
 ): Promise<PagePayload<UserDTO>> {
   const { page, pageSize } = resolveAdminPage(options);
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  if (options.query?.trim()) {
+    params.set("q", options.query.trim());
+  }
+  if (options.subscriptionStatus?.trim()) {
+    params.set("subscription_status", options.subscriptionStatus.trim());
+  }
+  if (options.identityProvider?.trim()) {
+    params.set("identity_provider", options.identityProvider.trim());
+  }
   const data = await authedRequest<PagePayload<UserDTO>>(
-    `/api/v1/admin/users?page=${page}&page_size=${pageSize}`,
+    `/api/v1/admin/users?${params.toString()}`,
     { accessToken },
     true,
   );
@@ -129,6 +149,21 @@ export async function deleteAdminUser(
     {
       method: "DELETE",
       accessToken,
+    },
+    true,
+  );
+}
+
+export async function importOpenWebUIUsers(
+  accessToken: string,
+  payload: ImportOpenWebUIUsersRequest,
+): Promise<ImportOpenWebUIUsersData> {
+  return authedRequest<ImportOpenWebUIUsersData>(
+    "/api/v1/admin/users/import/openwebui",
+    {
+      method: "POST",
+      accessToken,
+      body: payload,
     },
     true,
   );

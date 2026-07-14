@@ -57,6 +57,13 @@ type ConversationExportCompatibilityResponse struct {
 	Notes  string `json:"notes"`
 }
 
+// ConversationDefaultModelCandidateResponse 返回新会话自动选模候选。
+type ConversationDefaultModelCandidateResponse struct {
+	PlatformModelName string     `json:"platformModelName"`
+	Source            string     `json:"source"`
+	UsedAt            *time.Time `json:"usedAt"`
+}
+
 func toConversationResponse(item *model.Conversation) ConversationResponse {
 	labelsJSON := strings.TrimSpace(item.LabelsJSON)
 	if labelsJSON == "" || labelsJSON == "null" {
@@ -93,6 +100,11 @@ func toConversationResponse(item *model.Conversation) ConversationResponse {
 }
 
 func toConversationExportResponse(item *appconversation.ConversationExportResult) ConversationExportResponse {
+	return ToConversationExportResponse(item)
+}
+
+// ToConversationExportResponse 转换导出结果为响应 DTO（供跨包复用）。
+func ToConversationExportResponse(item *appconversation.ConversationExportResult) ConversationExportResponse {
 	if item == nil {
 		return ConversationExportResponse{}
 	}
@@ -949,8 +961,9 @@ func toMessageResponseWithRunAndFallback(m model.Message, run model.Run, fallbac
 
 // SendMessageResponse 发送消息响应 DTO。
 type SendMessageResponse struct {
-	UserMessage      MessageResponse `json:"userMessage"`
-	AssistantMessage MessageResponse `json:"assistantMessage"`
+	UserMessage         MessageResponse `json:"userMessage"`
+	AssistantMessage    MessageResponse `json:"assistantMessage"`
+	MetadataRefreshHint string          `json:"metadataRefreshHint,omitempty"`
 }
 
 type CancelMessageGenerationResponse struct {
@@ -963,8 +976,9 @@ func toSendMessageResponse(r *appconversation.SendMessageResult) SendMessageResp
 		UpstreamModelName: r.UpstreamModelName,
 	}
 	return SendMessageResponse{
-		UserMessage:      toMessageResponseWithRun(r.UserMessage, run),
-		AssistantMessage: toMessageResponseWithRun(r.AssistantMessage, run),
+		UserMessage:         toMessageResponseWithRun(r.UserMessage, run),
+		AssistantMessage:    toMessageResponseWithRun(r.AssistantMessage, run),
+		MetadataRefreshHint: r.MetadataRefreshHint,
 	}
 }
 
@@ -1199,6 +1213,12 @@ type FileUpdateResponseDoc struct {
 type ConversationCreateResponseDoc struct {
 	ErrorMsg string               `json:"errorMsg"`
 	Data     ConversationResponse `json:"data"`
+}
+
+// ConversationDefaultModelCandidateResponseDoc 新会话默认模型候选响应文档。
+type ConversationDefaultModelCandidateResponseDoc struct {
+	ErrorMsg string                                    `json:"errorMsg"`
+	Data     ConversationDefaultModelCandidateResponse `json:"data"`
 }
 
 // ConversationExportResponseDoc 会话导出响应文档。

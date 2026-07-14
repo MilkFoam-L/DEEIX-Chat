@@ -20,11 +20,16 @@ import type {
 import {
   PAGE_SIZE_DEFAULT,
   displayToKindsJson,
-  resolveErrorMessage,
   type ModelSortValue,
 } from "@/features/admin/types/llm";
+import { resolveAdminErrorMessage } from "@/features/admin/utils/admin-error";
 import { resolveKindsDisplayForProtocols } from "@/features/admin/utils/llm-display";
+import {
+  applySourceAvailabilityDelta,
+  isAdminLLMSourceAvailable,
+} from "@/features/admin/utils/llm-source-availability";
 import { patchByID, removeByID, removeManyByID, replaceByID } from "@/shared/lib/optimistic-list";
+import { runSettledBulkItems } from "@/shared/lib/bulk-action";
 
 type UseAdminModelsState = {
   items: AdminLLMModelDTO[];
@@ -71,7 +76,7 @@ type UseAdminModelsState = {
   handleBulkApplyProtocol: () => Promise<void>;
   handleBulkApplyVendor: () => Promise<void>;
   handleBulkApplyStatus: () => Promise<void>;
-  handleSourceStatusChange: (modelID: number, previous: AdminLLMStatus, next: AdminLLMStatus) => void;
+  handleSourceAvailabilityChange: (modelID: number, previousAvailable: boolean, nextAvailable: boolean) => void;
   handleSourceDeleteChange: (modelID: number, source: AdminLLMModelUpstreamSourceDTO, deleted: boolean) => void;
   handleRequestBulkDelete: () => void;
   handleDeleted: () => void;
@@ -87,7 +92,6 @@ export function useAdminModels(): UseAdminModelsState {
   const [loading, setLoading] = React.useState(true);
 
   const [query, setQuery] = React.useState("");
-  const [debouncedQuery, setDebouncedQuery] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState("");
   const [vendorFilter, setVendorFilter] = React.useState("");
   const [protocolFilter, setProtocolFilter] = React.useState("");
@@ -105,16 +109,14 @@ export function useAdminModels(): UseAdminModelsState {
   const [batchStatus, setBatchStatus] = React.useState<AdminLLMStatus | "">("");
   const [, startTableTransition] = React.useTransition();
   const requestSeqRef = React.useRef(0);
+  const pageSizeRef = React.useRef(PAGE_SIZE_DEFAULT);
 
   React.useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebouncedQuery(query.trim());
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [query]);
+    pageSizeRef.current = pageSize;
+  }, [pageSize]);
 
   const loadModels = React.useCallback(
-    async (nextPage = 1, nextPageSize = pageSize) => {
+    async (nextPage = 1, nextPageSize = pageSizeRef.current) => {
       const requestSeq = requestSeqRef.current + 1;
       requestSeqRef.current = requestSeq;
       setLoading(true);
@@ -128,7 +130,7 @@ export function useAdminModels(): UseAdminModelsState {
           page: nextPage,
           pageSize: nextPageSize,
           onlyActive: false,
-          query: debouncedQuery,
+          query: query.trim(),
           status: statusFilter,
           vendor: vendorFilter,
           protocol: protocolFilter,
@@ -145,19 +147,19 @@ export function useAdminModels(): UseAdminModelsState {
           setSelectedModelIDs(new Set());
         });
       } catch (error) {
-        toast.error(t("modelsLoadFailed"), { description: resolveErrorMessage(error) });
+        toast.error(t("modelsLoadFailed"), { description: resolveAdminErrorMessage(error) });
       } finally {
         if (requestSeq === requestSeqRef.current) {
           setLoading(false);
         }
       }
     },
-    [debouncedQuery, pageSize, protocolFilter, sortValue, startTableTransition, statusFilter, t, vendorFilter],
+    [protocolFilter, query, sortValue, startTableTransition, statusFilter, t, vendorFilter],
   );
 
   React.useEffect(() => {
-    void loadModels(1, pageSize);
-  }, [loadModels, pageSize]);
+    void loadModels(1, pageSizeRef.current);
+  }, [loadModels]);
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
@@ -189,7 +191,12 @@ export function useAdminModels(): UseAdminModelsState {
         return;
       }
       const previousItem = items.find((model) => model.id === item.id) ?? item;
-      setItems((current) => patchByID(current, item.id, (model) => model.id, { status: nextStatus }));
+      setItems((current) =>
+        patchByID(current, item.id, (model) => model.id, {
+          status: nextStatus,
+          ...(nextStatus === "inactive" ? { activeSourceCount: 0 } : {}),
+        }),
+      );
       try {
         const data = await updateAdminLLMModel(token, item.id, { status: nextStatus });
         const leavesCurrentStatusFilter = statusFilter !== "" && statusFilter !== nextStatus;
@@ -206,7 +213,7 @@ export function useAdminModels(): UseAdminModelsState {
         }
       } catch (error) {
         setItems((current) => replaceByID(current, item.id, (model) => model.id, previousItem));
-        toast.error(t("modelStatusUpdateFailed"), { description: resolveErrorMessage(error) });
+        toast.error(t("modelStatusUpdateFailed"), { description: resolveAdminErrorMessage(error) });
       }
     },
     [items, loadModels, page, pageSize, sortValue, statusFilter, t],
@@ -230,23 +237,24 @@ export function useAdminModels(): UseAdminModelsState {
         }
       } catch (error) {
         setItems((current) => replaceByID(current, item.id, (model) => model.id, previousItem));
-        toast.error(t("modelScopeUpdateFailed"), { description: resolveErrorMessage(error) });
+        toast.error(t("modelScopeUpdateFailed"), { description: resolveAdminErrorMessage(error) });
       }
     },
     [items, loadModels, page, pageSize, sortValue, t],
   );
 
-  const handleSourceStatusChange = React.useCallback((modelID: number, previous: AdminLLMStatus, next: AdminLLMStatus) => {
-    if (previous === next) {
-      return;
-    }
-    const delta = next === "active" ? 1 : -1;
+  const handleSourceAvailabilityChange = React.useCallback((modelID: number, previousAvailable: boolean, nextAvailable: boolean) => {
     setItems((current) =>
       current.map((item) =>
         item.id === modelID
           ? {
               ...item,
-              activeSourceCount: Math.max(0, item.activeSourceCount + delta),
+              activeSourceCount: applySourceAvailabilityDelta(
+                item.activeSourceCount,
+                item.sourceCount,
+                previousAvailable,
+                nextAvailable,
+              ),
             }
           : item,
       ),
@@ -255,17 +263,24 @@ export function useAdminModels(): UseAdminModelsState {
 
   const handleSourceDeleteChange = React.useCallback((modelID: number, source: AdminLLMModelUpstreamSourceDTO, deleted: boolean) => {
     const sourceDelta = deleted ? -1 : 1;
-    const activeDelta = source.status === "active" ? sourceDelta : 0;
     setItems((current) =>
-      current.map((item) =>
-        item.id === modelID
-          ? {
-              ...item,
-              sourceCount: Math.max(0, item.sourceCount + sourceDelta),
-              activeSourceCount: Math.max(0, item.activeSourceCount + activeDelta),
-            }
-          : item,
-      ),
+      current.map((item) => {
+        if (item.id !== modelID) {
+          return item;
+        }
+        const nextSourceCount = Math.max(0, item.sourceCount + sourceDelta);
+        const wasAvailable = isAdminLLMSourceAvailable(source, item.status);
+        return {
+          ...item,
+          sourceCount: nextSourceCount,
+          activeSourceCount: applySourceAvailabilityDelta(
+            item.activeSourceCount,
+            nextSourceCount,
+            deleted ? wasAvailable : false,
+            deleted ? false : wasAvailable,
+          ),
+        };
+      }),
     );
   }, []);
 
@@ -294,13 +309,15 @@ export function useAdminModels(): UseAdminModelsState {
       current.map((item) => (targetIDs.has(item.id) ? { ...item, kindsJSON: nextKindsJSON } : item)),
     );
     try {
-      const results = await Promise.allSettled(
-        targets.map((item) => updateAdminLLMModel(token, item.id, { kindsJSON: nextKindsJSON })),
-      );
-      const failedModels = targets.filter((_, index) => results[index]?.status === "rejected");
-      const successModels = targets.filter((_, index) => results[index]?.status === "fulfilled");
+      const results = await runSettledBulkItems({
+        items: targets,
+        title: t("bulkKindsUpdated", { count: targets.length }),
+        runItem: (item) => updateAdminLLMModel(token, item.id, { kindsJSON: nextKindsJSON }),
+      });
+      const failedModels = results.filter((result) => result.status === "rejected").map((result) => result.item);
+      const successModels = results.filter((result) => result.status === "fulfilled").map((result) => result.item);
       const successResponses = results
-        .filter((result): result is PromiseFulfilledResult<{ model: AdminLLMModelDTO }> => result.status === "fulfilled")
+        .filter((result): result is Extract<typeof result, { status: "fulfilled" }> => result.status === "fulfilled")
         .map((result) => result.value.model);
 
       setItems((current) =>
@@ -328,7 +345,7 @@ export function useAdminModels(): UseAdminModelsState {
       setItems((current) =>
         rollbackModels.reduce((next, model) => replaceByID(next, model.id, (item) => item.id, model), current),
       );
-      toast.error(t("bulkKindsFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("bulkKindsFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setBatchApplying(false);
     }
@@ -359,13 +376,15 @@ export function useAdminModels(): UseAdminModelsState {
       current.map((item) => (targetIDs.has(item.id) ? { ...item, vendor: nextVendor } : item)),
     );
     try {
-      const results = await Promise.allSettled(
-        targets.map((item) => updateAdminLLMModel(token, item.id, { vendor: nextVendor })),
-      );
-      const failedModels = targets.filter((_, index) => results[index]?.status === "rejected");
-      const successModels = targets.filter((_, index) => results[index]?.status === "fulfilled");
+      const results = await runSettledBulkItems({
+        items: targets,
+        title: t("bulkVendorUpdated", { count: targets.length }),
+        runItem: (item) => updateAdminLLMModel(token, item.id, { vendor: nextVendor }),
+      });
+      const failedModels = results.filter((result) => result.status === "rejected").map((result) => result.item);
+      const successModels = results.filter((result) => result.status === "fulfilled").map((result) => result.item);
       const successResponses = results
-        .filter((result): result is PromiseFulfilledResult<{ model: AdminLLMModelDTO }> => result.status === "fulfilled")
+        .filter((result): result is Extract<typeof result, { status: "fulfilled" }> => result.status === "fulfilled")
         .map((result) => result.value.model);
 
       setItems((current) =>
@@ -393,7 +412,7 @@ export function useAdminModels(): UseAdminModelsState {
       setItems((current) =>
         rollbackModels.reduce((next, model) => replaceByID(next, model.id, (item) => item.id, model), current),
       );
-      toast.error(t("bulkVendorFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("bulkVendorFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setBatchApplying(false);
     }
@@ -424,13 +443,15 @@ export function useAdminModels(): UseAdminModelsState {
       current.map((item) => (targetIDs.has(item.id) ? { ...item, status: nextStatus } : item)),
     );
     try {
-      const results = await Promise.allSettled(
-        targets.map((item) => updateAdminLLMModel(token, item.id, { status: nextStatus })),
-      );
-      const failedModels = targets.filter((_, index) => results[index]?.status === "rejected");
-      const successModels = targets.filter((_, index) => results[index]?.status === "fulfilled");
+      const results = await runSettledBulkItems({
+        items: targets,
+        title: t("bulkStatusUpdated", { count: targets.length }),
+        runItem: (item) => updateAdminLLMModel(token, item.id, { status: nextStatus }),
+      });
+      const failedModels = results.filter((result) => result.status === "rejected").map((result) => result.item);
+      const successModels = results.filter((result) => result.status === "fulfilled").map((result) => result.item);
       const successResponses = results
-        .filter((result): result is PromiseFulfilledResult<{ model: AdminLLMModelDTO }> => result.status === "fulfilled")
+        .filter((result): result is Extract<typeof result, { status: "fulfilled" }> => result.status === "fulfilled")
         .map((result) => result.value.model);
 
       setItems((current) =>
@@ -458,7 +479,7 @@ export function useAdminModels(): UseAdminModelsState {
       setItems((current) =>
         rollbackModels.reduce((next, model) => replaceByID(next, model.id, (item) => item.id, model), current),
       );
-      toast.error(t("bulkStatusFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("bulkStatusFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setBatchApplying(false);
     }
@@ -491,8 +512,10 @@ export function useAdminModels(): UseAdminModelsState {
       current.map((item) => (targetIDs.has(item.id) ? { ...item, protocolsJSON: nextProtocolsJSON, kindsJSON: nextKindsJSON } : item)),
     );
     try {
-      const results = await Promise.allSettled(
-        targets.map(async (model) => {
+      const results = await runSettledBulkItems({
+        items: targets,
+        title: t("bulkProtocolUpdated", { count: targets.length }),
+        runItem: async (model) => {
           const sources = await listAdminLLMModelUpstreamSources(token, model.id, { page: 1, pageSize: 2000 });
           if (sources.results.length === 0) {
             throw new Error("model upstream sources not found");
@@ -510,12 +533,12 @@ export function useAdminModels(): UseAdminModelsState {
             });
           }
           return { ...model, kindsJSON: nextKindsJSON, protocolsJSON: nextProtocolsJSON };
-        }),
-      );
-      const failedModels = targets.filter((_, index) => results[index]?.status === "rejected");
-      const successModels = targets.filter((_, index) => results[index]?.status === "fulfilled");
+        },
+      });
+      const failedModels = results.filter((result) => result.status === "rejected").map((result) => result.item);
+      const successModels = results.filter((result) => result.status === "fulfilled").map((result) => result.item);
       const successResponses = results
-        .filter((result): result is PromiseFulfilledResult<AdminLLMModelDTO> => result.status === "fulfilled")
+        .filter((result): result is Extract<typeof result, { status: "fulfilled" }> => result.status === "fulfilled")
         .map((result) => result.value);
       setItems((current) =>
         successResponses.reduce((next, model) => replaceByID(next, model.id, (item) => item.id, model), current),
@@ -542,7 +565,7 @@ export function useAdminModels(): UseAdminModelsState {
       setItems((current) =>
         rollbackModels.reduce((next, model) => replaceByID(next, model.id, (item) => item.id, model), current),
       );
-      toast.error(t("bulkProtocolFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("bulkProtocolFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setBatchApplying(false);
     }
@@ -639,7 +662,7 @@ export function useAdminModels(): UseAdminModelsState {
     handleBulkApplyProtocol,
     handleBulkApplyVendor,
     handleBulkApplyStatus,
-    handleSourceStatusChange,
+    handleSourceAvailabilityChange,
     handleSourceDeleteChange,
     handleRequestBulkDelete,
     handleDeleted,

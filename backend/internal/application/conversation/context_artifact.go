@@ -53,14 +53,17 @@ type snapshotContextArtifactInput struct {
 }
 
 type historicalContextArtifactInput struct {
-	CurrentMessageID uint
-	Query            string
-	Candidates       []domainconversation.ContextArtifact
-	CurrentRAGChunks []domainconversation.RAGChunk
-	CurrentFallbacks []AttachmentInput
-	CurrentRecall    []domainconversation.MessageChunk
-	MaxItems         int
-	MaxTokens        int64
+	CurrentMessageID   uint
+	HasCurrentSnapshot bool
+	CoveredUntilID     uint
+	AllowedMessageIDs  map[uint]struct{}
+	Query              string
+	Candidates         []domainconversation.ContextArtifact
+	CurrentRAGChunks   []domainconversation.RAGChunk
+	CurrentFallbacks   []AttachmentInput
+	CurrentRecall      []domainconversation.MessageChunk
+	MaxItems           int
+	MaxTokens          int64
 }
 
 type historicalScoredArtifact struct {
@@ -166,6 +169,9 @@ func (s *Service) recallHistoricalContextArtifacts(
 	ctx context.Context,
 	conversationID uint,
 	currentMessageID uint,
+	hasCurrentSnapshot bool,
+	coveredUntilID uint,
+	allowedMessageIDs map[uint]struct{},
 	query string,
 	currentRAGChunks []domainconversation.RAGChunk,
 	currentFallbacks []AttachmentInput,
@@ -179,7 +185,9 @@ func (s *Service) recallHistoricalContextArtifacts(
 		domainconversation.ContextArtifactFileRAGFallback,
 		domainconversation.ContextArtifactToolResult,
 		domainconversation.ContextArtifactNativeTool,
-		domainconversation.ContextArtifactSummary,
+	}
+	if !hasCurrentSnapshot {
+		kinds = append(kinds, domainconversation.ContextArtifactSummary)
 	}
 	candidates, err := s.repo.ListRecentContextArtifacts(ctx, conversationID, kinds, historicalArtifactScanLimit)
 	if err != nil {
@@ -193,12 +201,15 @@ func (s *Service) recallHistoricalContextArtifacts(
 		return nil
 	}
 	return selectHistoricalContextArtifacts(historicalContextArtifactInput{
-		CurrentMessageID: currentMessageID,
-		Query:            query,
-		Candidates:       candidates,
-		CurrentRAGChunks: currentRAGChunks,
-		CurrentFallbacks: currentFallbacks,
-		CurrentRecall:    currentRecall,
+		CurrentMessageID:   currentMessageID,
+		HasCurrentSnapshot: hasCurrentSnapshot,
+		CoveredUntilID:     coveredUntilID,
+		AllowedMessageIDs:  allowedMessageIDs,
+		Query:              query,
+		Candidates:         candidates,
+		CurrentRAGChunks:   currentRAGChunks,
+		CurrentFallbacks:   currentFallbacks,
+		CurrentRecall:      currentRecall,
 	})
 }
 
@@ -328,7 +339,8 @@ func buildPromptContextArtifacts(input promptContextArtifactInput) []domainconve
 func buildToolContextArtifacts(input toolContextArtifactInput) []domainconversation.ContextArtifact {
 	items := make([]domainconversation.ContextArtifact, 0, len(input.Rows))
 	for _, row := range input.Rows {
-		content := toolArtifactContent(row)
+		rawContent := toolArtifactContent(row)
+		content, truncated := toolArtifactEvidenceContent(rawContent, contextArtifactExcerptChars)
 		if strings.TrimSpace(content) == "" {
 			continue
 		}
@@ -346,8 +358,8 @@ func buildToolContextArtifacts(input toolContextArtifactInput) []domainconversat
 			SourceType:     "tool_call",
 			SourceID:       sourceID,
 			SourceTitle:    strings.TrimSpace(row.ToolName),
-			Content:        contextArtifactExcerpt(content, contextArtifactExcerptChars),
-			ContentHash:    contextArtifactHash(kind, sourceID, content),
+			Content:        content,
+			ContentHash:    contextArtifactHash(kind, sourceID, rawContent),
 			TokenEstimate:  estimateTokens(content),
 			Score:          1,
 			MetadataJSON: contextArtifactMetadata(map[string]interface{}{
@@ -357,6 +369,8 @@ func buildToolContextArtifacts(input toolContextArtifactInput) []domainconversat
 				"status":       strings.TrimSpace(row.Status),
 				"latency_ms":   row.LatencyMS,
 				"input":        strings.TrimSpace(row.InputJSON),
+				"output_chars": len([]rune(rawContent)),
+				"truncated":    truncated,
 			}),
 		})
 	}
@@ -423,6 +437,20 @@ func selectHistoricalContextArtifacts(input historicalContextArtifactInput) []do
 
 	scored := make([]historicalScoredArtifact, 0, len(input.Candidates))
 	for index, item := range input.Candidates {
+		if input.HasCurrentSnapshot && item.Kind == domainconversation.ContextArtifactSummary {
+			continue
+		}
+		if input.CoveredUntilID > 0 && item.MessageID > 0 && item.MessageID <= input.CoveredUntilID {
+			continue
+		}
+		if len(input.AllowedMessageIDs) > 0 {
+			if item.MessageID == 0 {
+				continue
+			}
+			if _, ok := input.AllowedMessageIDs[item.MessageID]; !ok {
+				continue
+			}
+		}
 		content := strings.TrimSpace(item.Content)
 		if content == "" || item.MessageID == input.CurrentMessageID {
 			continue
@@ -549,6 +577,17 @@ func toolArtifactContent(row domainconversation.ToolCall) string {
 	default:
 		return firstNonEmptyString(row.OutputJSON, row.ErrorJSON)
 	}
+}
+
+func toolArtifactEvidenceContent(raw string, maxChars int) (string, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", false
+	}
+	if maxChars <= 0 || len([]rune(value)) <= maxChars {
+		return value, false
+	}
+	return headTailToolOutput(value, maxChars), true
 }
 
 func toolContextArtifactKind(row domainconversation.ToolCall) domainconversation.ContextArtifactKind {

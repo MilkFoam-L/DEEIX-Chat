@@ -2,113 +2,272 @@
 
 import * as React from "react";
 
-import type { PendingExchange } from "@/features/chat/types/chat-runtime";
+import { clearLiveUpstreamThinkTrace, upsertLiveUpstreamThinkTrace } from "@/features/chat/model/upstream-think-store";
+import type { PendingExchangeMap } from "@/features/chat/types/chat-runtime";
+import type { StreamMessageEvent } from "@/shared/api/conversation.types";
 
 const STREAM_TEXT_FLUSH_INTERVAL_MS = 50;
+const STREAM_THINK_FLUSH_INTERVAL_MS = 40;
+const STREAM_THINK_BASE_CHARS_PER_FLUSH = 48;
+const STREAM_THINK_CATCHUP_THRESHOLD = 1024;
+const STREAM_THINK_CATCHUP_CHARS_PER_FLUSH = 256;
+
+type UpstreamThinkDeltaEvent = Extract<StreamMessageEvent, { type: "upstream_think_delta" }>;
+
+type StreamBuffer = {
+  runID: string | null;
+  pendingText: string;
+  textFrame: number | null;
+  textTimeout: number | null;
+  lastTextFlushAt: number;
+  pendingThinkDelta: string;
+  pendingThinkEvent: UpstreamThinkDeltaEvent | null;
+  thinkFrame: number | null;
+  thinkTimeout: number | null;
+  lastThinkFlushAt: number;
+};
+
+function createStreamBuffer(runID?: string): StreamBuffer {
+  return {
+    runID: runID?.trim() || null,
+    pendingText: "",
+    textFrame: null,
+    textTimeout: null,
+    lastTextFlushAt: 0,
+    pendingThinkDelta: "",
+    pendingThinkEvent: null,
+    thinkFrame: null,
+    thinkTimeout: null,
+    lastThinkFlushAt: 0,
+  };
+}
+
+function resolveThinkFlushSize(pendingLength: number) {
+  if (pendingLength > STREAM_THINK_CATCHUP_THRESHOLD) {
+    return Math.min(pendingLength, STREAM_THINK_CATCHUP_CHARS_PER_FLUSH);
+  }
+  return Math.min(pendingLength, STREAM_THINK_BASE_CHARS_PER_FLUSH);
+}
+
+function cancelBufferTimers(buffer: StreamBuffer) {
+  if (buffer.textFrame !== null) {
+    window.cancelAnimationFrame(buffer.textFrame);
+  }
+  if (buffer.textTimeout !== null) {
+    window.clearTimeout(buffer.textTimeout);
+  }
+  if (buffer.thinkFrame !== null) {
+    window.cancelAnimationFrame(buffer.thinkFrame);
+  }
+  if (buffer.thinkTimeout !== null) {
+    window.clearTimeout(buffer.thinkTimeout);
+  }
+}
 
 export function useChatStreamBuffer({
-  setPendingExchange,
+  setPendingExchanges,
 }: {
-  setPendingExchange: React.Dispatch<React.SetStateAction<PendingExchange | null>>;
+  setPendingExchanges: React.Dispatch<React.SetStateAction<PendingExchangeMap>>;
 }) {
-  const streamingMessageKeyRef = React.useRef<string | null>(null);
-  const pendingStreamTextRef = React.useRef("");
-  const streamFlushFrameRef = React.useRef<number | null>(null);
-  const streamFlushTimeoutRef = React.useRef<number | null>(null);
-  const lastStreamFlushAtRef = React.useRef(0);
+  const buffersRef = React.useRef(new Map<string, StreamBuffer>());
+  const scheduleThinkFlushRef = React.useRef<(exchangeKey: string) => void>(() => undefined);
 
-  const flushStreamText = React.useCallback(function flushStreamText() {
-    streamFlushFrameRef.current = null;
-    lastStreamFlushAtRef.current = performance.now();
-    const pendingText = pendingStreamTextRef.current;
-    const exchangeKey = streamingMessageKeyRef.current;
-    if (!exchangeKey || !pendingText) {
+  const flushStreamText = React.useCallback((exchangeKey: string) => {
+    const buffer = buffersRef.current.get(exchangeKey);
+    if (!buffer) {
       return;
     }
-    pendingStreamTextRef.current = "";
+    buffer.textFrame = null;
+    buffer.lastTextFlushAt = performance.now();
+    const pendingText = buffer.pendingText;
+    if (!pendingText) {
+      return;
+    }
+    buffer.pendingText = "";
 
-    setPendingExchange((prev) => {
-      if (!prev || prev.key !== exchangeKey) {
-        return prev;
+    setPendingExchanges((current) => {
+      const exchange = current[exchangeKey];
+      if (!exchange) {
+        return current;
       }
       return {
-        ...prev,
-        assistantPending: false,
-        assistantStreaming: true,
-        assistantText: prev.assistantText + pendingText,
+        ...current,
+        [exchangeKey]: {
+          ...exchange,
+          assistantPending: false,
+          assistantStreaming: true,
+          assistantText: exchange.assistantText + pendingText,
+        },
       };
     });
+  }, [setPendingExchanges]);
 
-  }, [setPendingExchange]);
-
-  const scheduleStreamFlush = React.useCallback(() => {
-    if (streamFlushFrameRef.current !== null || streamFlushTimeoutRef.current !== null) {
+  const flushUpstreamThink = React.useCallback((exchangeKey: string) => {
+    const buffer = buffersRef.current.get(exchangeKey);
+    if (!buffer) {
+      return;
+    }
+    buffer.thinkFrame = null;
+    buffer.lastThinkFlushAt = performance.now();
+    if (!buffer.runID || !buffer.pendingThinkEvent) {
       return;
     }
 
-    const elapsed = performance.now() - lastStreamFlushAtRef.current;
+    const flushSize = resolveThinkFlushSize(buffer.pendingThinkDelta.length);
+    const delta = flushSize > 0 ? buffer.pendingThinkDelta.slice(0, flushSize) : "";
+    buffer.pendingThinkDelta = flushSize > 0 ? buffer.pendingThinkDelta.slice(flushSize) : "";
+    const event: UpstreamThinkDeltaEvent = {
+      ...buffer.pendingThinkEvent,
+      delta,
+      contentMarkdown: flushSize > 0 ? undefined : buffer.pendingThinkEvent.contentMarkdown,
+    };
+    if (!buffer.pendingThinkDelta) {
+      buffer.pendingThinkEvent = null;
+    }
+    upsertLiveUpstreamThinkTrace(buffer.runID, event);
+
+    if (buffer.pendingThinkDelta) {
+      scheduleThinkFlushRef.current(exchangeKey);
+    }
+  }, []);
+
+  const scheduleStreamFlush = React.useCallback((exchangeKey: string) => {
+    const buffer = buffersRef.current.get(exchangeKey);
+    if (!buffer || buffer.textFrame !== null || buffer.textTimeout !== null) {
+      return;
+    }
+    const elapsed = performance.now() - buffer.lastTextFlushAt;
     if (elapsed >= STREAM_TEXT_FLUSH_INTERVAL_MS) {
-      streamFlushFrameRef.current = window.requestAnimationFrame(flushStreamText);
+      buffer.textFrame = window.requestAnimationFrame(() => flushStreamText(exchangeKey));
       return;
     }
-
-    streamFlushTimeoutRef.current = window.setTimeout(() => {
-      streamFlushTimeoutRef.current = null;
-      streamFlushFrameRef.current = window.requestAnimationFrame(flushStreamText);
+    buffer.textTimeout = window.setTimeout(() => {
+      buffer.textTimeout = null;
+      buffer.textFrame = window.requestAnimationFrame(() => flushStreamText(exchangeKey));
     }, STREAM_TEXT_FLUSH_INTERVAL_MS - elapsed);
   }, [flushStreamText]);
 
-  const enqueueStreamText = React.useCallback(
-    (delta: string) => {
-      if (!delta) {
-        return;
-      }
-      pendingStreamTextRef.current += delta;
-      scheduleStreamFlush();
-    },
-    [scheduleStreamFlush],
-  );
-
-  const startStream = React.useCallback((exchangeKey: string) => {
-    pendingStreamTextRef.current = "";
-    streamingMessageKeyRef.current = exchangeKey;
-    lastStreamFlushAtRef.current = 0;
-  }, []);
-
-  const flushStreamTextNow = React.useCallback(() => {
-    if (streamFlushFrameRef.current !== null) {
-      window.cancelAnimationFrame(streamFlushFrameRef.current);
-      streamFlushFrameRef.current = null;
+  const scheduleUpstreamThinkFlush = React.useCallback((exchangeKey: string) => {
+    const buffer = buffersRef.current.get(exchangeKey);
+    if (!buffer || buffer.thinkFrame !== null || buffer.thinkTimeout !== null) {
+      return;
     }
-    if (streamFlushTimeoutRef.current !== null) {
-      window.clearTimeout(streamFlushTimeoutRef.current);
-      streamFlushTimeoutRef.current = null;
+    const elapsed = performance.now() - buffer.lastThinkFlushAt;
+    if (elapsed >= STREAM_THINK_FLUSH_INTERVAL_MS) {
+      buffer.thinkFrame = window.requestAnimationFrame(() => flushUpstreamThink(exchangeKey));
+      return;
     }
-    flushStreamText();
-  }, [flushStreamText]);
-
-  const resetStreamBuffer = React.useCallback(() => {
-    if (streamFlushFrameRef.current !== null) {
-      window.cancelAnimationFrame(streamFlushFrameRef.current);
-      streamFlushFrameRef.current = null;
-    }
-    if (streamFlushTimeoutRef.current !== null) {
-      window.clearTimeout(streamFlushTimeoutRef.current);
-      streamFlushTimeoutRef.current = null;
-    }
-    pendingStreamTextRef.current = "";
-    streamingMessageKeyRef.current = null;
-  }, []);
+    buffer.thinkTimeout = window.setTimeout(() => {
+      buffer.thinkTimeout = null;
+      buffer.thinkFrame = window.requestAnimationFrame(() => flushUpstreamThink(exchangeKey));
+    }, STREAM_THINK_FLUSH_INTERVAL_MS - elapsed);
+  }, [flushUpstreamThink]);
 
   React.useEffect(() => {
-    return () => {
-      resetStreamBuffer();
-    };
-  }, [resetStreamBuffer]);
+    scheduleThinkFlushRef.current = scheduleUpstreamThinkFlush;
+  }, [scheduleUpstreamThinkFlush]);
+
+  const enqueueStreamText = React.useCallback((exchangeKey: string, delta: string) => {
+    const buffer = buffersRef.current.get(exchangeKey);
+    if (!buffer || !delta) {
+      return;
+    }
+    buffer.pendingText += delta;
+    scheduleStreamFlush(exchangeKey);
+  }, [scheduleStreamFlush]);
+
+  const enqueueUpstreamThinkDelta = React.useCallback((exchangeKey: string, event: UpstreamThinkDeltaEvent) => {
+    const buffer = buffersRef.current.get(exchangeKey);
+    if (!buffer) {
+      return;
+    }
+    if (event.trace?.enabled || typeof event.contentMarkdown === "string") {
+      buffer.pendingThinkDelta = "";
+      buffer.pendingThinkEvent = event;
+      scheduleUpstreamThinkFlush(exchangeKey);
+      return;
+    }
+    if (event.delta) {
+      buffer.pendingThinkDelta += event.delta;
+    }
+    buffer.pendingThinkEvent = { ...event, delta: "" };
+    scheduleUpstreamThinkFlush(exchangeKey);
+  }, [scheduleUpstreamThinkFlush]);
+
+  const startStream = React.useCallback((exchangeKey: string, runID?: string) => {
+    const existing = buffersRef.current.get(exchangeKey);
+    if (existing) {
+      cancelBufferTimers(existing);
+    }
+    const buffer = createStreamBuffer(runID);
+    buffersRef.current.set(exchangeKey, buffer);
+    clearLiveUpstreamThinkTrace(buffer.runID);
+  }, []);
+
+  const flushStreamTextNow = React.useCallback((exchangeKey: string) => {
+    const buffer = buffersRef.current.get(exchangeKey);
+    if (!buffer) {
+      return;
+    }
+    if (buffer.textFrame !== null) {
+      window.cancelAnimationFrame(buffer.textFrame);
+      buffer.textFrame = null;
+    }
+    if (buffer.textTimeout !== null) {
+      window.clearTimeout(buffer.textTimeout);
+      buffer.textTimeout = null;
+    }
+    flushStreamText(exchangeKey);
+  }, [flushStreamText]);
+
+  const flushUpstreamThinkNow = React.useCallback((exchangeKey: string) => {
+    const buffer = buffersRef.current.get(exchangeKey);
+    if (!buffer) {
+      return;
+    }
+    if (buffer.thinkFrame !== null) {
+      window.cancelAnimationFrame(buffer.thinkFrame);
+      buffer.thinkFrame = null;
+    }
+    if (buffer.thinkTimeout !== null) {
+      window.clearTimeout(buffer.thinkTimeout);
+      buffer.thinkTimeout = null;
+    }
+    if (!buffer.runID || !buffer.pendingThinkEvent) {
+      return;
+    }
+    upsertLiveUpstreamThinkTrace(buffer.runID, {
+      ...buffer.pendingThinkEvent,
+      delta: buffer.pendingThinkDelta,
+      contentMarkdown: buffer.pendingThinkDelta ? undefined : buffer.pendingThinkEvent.contentMarkdown,
+    });
+    buffer.pendingThinkDelta = "";
+    buffer.pendingThinkEvent = null;
+  }, []);
+
+  const resetStreamBuffer = React.useCallback((exchangeKey?: string) => {
+    if (exchangeKey) {
+      const buffer = buffersRef.current.get(exchangeKey);
+      if (!buffer) {
+        return;
+      }
+      cancelBufferTimers(buffer);
+      buffersRef.current.delete(exchangeKey);
+      return;
+    }
+    for (const buffer of buffersRef.current.values()) {
+      cancelBufferTimers(buffer);
+    }
+    buffersRef.current.clear();
+  }, []);
+
+  React.useEffect(() => () => resetStreamBuffer(), [resetStreamBuffer]);
 
   return {
+    enqueueUpstreamThinkDelta,
     enqueueStreamText,
     flushStreamTextNow,
+    flushUpstreamThinkNow,
     resetStreamBuffer,
     startStream,
   };

@@ -19,11 +19,16 @@ type Service struct {
 	repo              repository.SettingsRepository
 	dataEncryptionKey string
 	authSafety        authSafetyService
+	vectorStore       vectorStoreAvailabilityService
 	auditWriter       auditWriter
 }
 
 type authSafetyService interface {
 	HasActiveSuperAdminIdentity(ctx context.Context) (bool, error)
+}
+
+type vectorStoreAvailabilityService interface {
+	VectorStoreAvailable(ctx context.Context) (bool, error)
 }
 
 type auditWriter interface {
@@ -37,6 +42,10 @@ func NewService(repo repository.SettingsRepository, dataEncryptionKey string) *S
 
 func (s *Service) SetAuthSafetyService(service authSafetyService) {
 	s.authSafety = service
+}
+
+func (s *Service) SetVectorStoreAvailabilityService(service vectorStoreAvailabilityService) {
+	s.vectorStore = service
 }
 
 // SetAuditWriter 注入系统设置审计写入器。
@@ -83,7 +92,10 @@ func (s *Service) Seed(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	return s.repo.UpsertWithDescription(ctx, items)
+	if err := s.repo.UpsertWithDescription(ctx, items); err != nil {
+		return err
+	}
+	return s.migrateDefaultAllowedMIMETypes(ctx)
 }
 
 // ListAll 查询全部配置，按 namespace 分组。
@@ -123,6 +135,61 @@ func (s *Service) RuntimeValuesByNamespace(ctx context.Context, namespace string
 		result[item.Key] = strings.TrimSpace(value)
 	}
 	return result, nil
+}
+
+func (s *Service) migrateDefaultAllowedMIMETypes(ctx context.Context) error {
+	items, err := s.repo.ListByNamespace(ctx, "file")
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.Key != "allowed_mime_types" {
+			continue
+		}
+		value := strings.TrimSpace(item.Value)
+		if value == "" || !sameCSVSet(value, legacyDefaultAllowedMIMETypes) {
+			return nil
+		}
+		updates, encryptErr := s.encryptSettingsForStorage([]domainsettings.SystemSetting{{
+			Namespace:   "file",
+			Key:         "allowed_mime_types",
+			Value:       defaultAllowedMIMETypes,
+			ValueType:   "string",
+			Description: "白名单MIME类型(逗号分隔)",
+		}})
+		if encryptErr != nil {
+			return encryptErr
+		}
+		return s.repo.Upsert(ctx, updates)
+	}
+	return nil
+}
+
+func sameCSVSet(left string, right string) bool {
+	leftSet := csvSet(left)
+	rightSet := csvSet(right)
+	if len(leftSet) != len(rightSet) {
+		return false
+	}
+	for item := range leftSet {
+		if _, ok := rightSet[item]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func csvSet(raw string) map[string]struct{} {
+	parts := strings.Split(raw, ",")
+	result := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.ToLower(strings.TrimSpace(part))
+		if value == "" {
+			continue
+		}
+		result[value] = struct{}{}
+	}
+	return result
 }
 
 // validNamespaces 合法的 namespace 集合。
@@ -227,6 +294,13 @@ func validatePatchItem(item PatchItem) error {
 		return nil
 	case "billing:usd_to_cny_rate":
 		return validateFloatMinMax(value, 0.000001, 1000, key)
+	case "billing:display_currency":
+		switch value {
+		case "USD", "CNY":
+			return nil
+		default:
+			return fmt.Errorf("%s must be one of: USD, CNY", key)
+		}
 	case "billing:prepaid_amount_usd":
 		return validateFloatMinMax(value, 0, 1000000, key)
 	case "billing:stripe_publishable_key", "billing:stripe_secret_key", "billing:stripe_webhook_secret", "billing:epay_pid", "billing:epay_key":
@@ -243,8 +317,6 @@ func validatePatchItem(item PatchItem) error {
 			return err
 		}
 		return validateOptionalHTTPURL(value, key)
-	case "auth:login_page_title":
-		return validateStringMax(value, 80, key)
 	case "auth:logo_url":
 		return validateOptionalLogoURL(value, key)
 	case "chat:model_option_policy_mode":
@@ -276,7 +348,9 @@ func validatePatchItem(item PatchItem) error {
 		return validateStringMax(value, 255, key)
 	case "auth:turnstile_site_key", "auth:turnstile_secret_key":
 		return validateStringMax(value, 512, key)
-	case "chat:default_system_prompt":
+	case "chat:conversation_default_model":
+		return validateStringMax(value, 255, key)
+	case "chat:default_system_prompt", "chat:skills_prompt":
 		return validateStringMax(value, 20000, key)
 	case "auth:smtp_port":
 		return validateIntMinMax(value, 1, 65535, key)
@@ -357,6 +431,8 @@ func validatePatchItem(item PatchItem) error {
 		default:
 			return fmt.Errorf("%s must be one of: %s, %s", key, mineruextract.SourceCloud, mineruextract.SourceSelfHosted)
 		}
+	case "extract:mineru_file_types":
+		return validateMinerUFileTypes(value, key)
 	case "extract:tika_base_url":
 		if value == "" {
 			return nil
@@ -384,7 +460,7 @@ func validatePatchItem(item PatchItem) error {
 		return validateStringMax(value, 255, key)
 	case "extract:tencent_ocr_secret_id", "extract:tencent_ocr_secret_key", "extract:aliyun_ocr_access_key_id", "extract:aliyun_ocr_access_key_secret":
 		return validateStringMax(value, 512, key)
-	case "auth:username_login_enabled", "auth:email_login_enabled", "auth:third_party_login_enabled", "auth:email_registration_enabled", "auth:email_verification_enabled", "auth:email_registration_block_plus_alias", "auth:auto_link_verified_email", "auth:turnstile_registration_enabled", "auth:rate_limit_enabled", "billing:native_tool_billing_enabled", "chat:rag_enabled", "chat:message_embedding_enabled", "chat:semantic_context_enabled", "file:full_context_limit_enabled", "file:embedding_enabled", "file:embed_trigger_on_upload", "file:embedding_normalize", "extract:image_ocr_enabled", "extract:pdf_ocr_fallback_enabled", "mcp:mcp_enable":
+	case "auth:username_login_enabled", "auth:email_login_enabled", "auth:third_party_login_enabled", "auth:email_registration_enabled", "auth:email_verification_enabled", "auth:password_reset_enabled", "auth:email_registration_block_plus_alias", "auth:auto_link_verified_email", "auth:turnstile_registration_enabled", "auth:rate_limit_enabled", "billing:native_tool_billing_enabled", "chat:rag_enabled", "chat:message_embedding_enabled", "chat:semantic_context_enabled", "file:full_context_limit_enabled", "file:embedding_enabled", "file:embed_trigger_on_upload", "file:embedding_normalize", "extract:image_ocr_enabled", "extract:pdf_ocr_fallback_enabled", "mcp:mcp_enable":
 		if _, err := strconv.ParseBool(value); err != nil {
 			return fmt.Errorf("%s must be bool", key)
 		}
@@ -401,9 +477,30 @@ func validatePatchItem(item PatchItem) error {
 	case "mcp:mcp_max_selected_tools_per_message":
 		return validateIntMinMax(value, 1, config.MaxMCPSelectedToolsPerMessage, key)
 	case "mcp:mcp_tool_timeout_seconds":
-		return validateIntMinMax(value, 1, 120, key)
+		return validateIntMinMax(value, 0, maxMCPToolTimeoutSeconds, key)
 	case "mcp:mcp_tool_retry_count":
 		return validateIntMinMax(value, 0, 5, key)
+	case "mcp:mcp_tool_prompt":
+		return validateStringMax(value, 20000, key)
+	}
+	return nil
+}
+
+func validateMinerUFileTypes(value string, key string) error {
+	allowed := map[string]struct{}{
+		"pdf":          {},
+		"word":         {},
+		"presentation": {},
+		"excel":        {},
+	}
+	for _, part := range strings.Split(value, ",") {
+		item := strings.ToLower(strings.TrimSpace(part))
+		if item == "" {
+			continue
+		}
+		if _, ok := allowed[item]; !ok {
+			return fmt.Errorf("%s contains invalid file type: %s", key, item)
+		}
 	}
 	return nil
 }
@@ -551,10 +648,22 @@ func (s *Service) applyAuthSettingDependencies(ctx context.Context, patches []Pa
 		}
 	}
 	emailVerificationEnabled, _ := strconv.ParseBool(next["auth:email_verification_enabled"])
+	passwordResetEnabled, _ := strconv.ParseBool(next["auth:password_reset_enabled"])
+	if !emailVerificationEnabled {
+		if patchValueIsTrue(patches, "auth", "password_reset_enabled") {
+			return nil, fmt.Errorf("auth:password_reset_enabled requires auth:email_verification_enabled")
+		}
+		patches = upsertPatch(patches, PatchItem{Namespace: "auth", Key: "password_reset_enabled", Value: "false"})
+		next["auth:password_reset_enabled"] = "false"
+		passwordResetEnabled = false
+	}
 	if emailVerificationEnabled {
 		if err := validateEmailVerificationSMTPSettings(next); err != nil {
 			return nil, err
 		}
+	}
+	if passwordResetEnabled && !usernameLoginEnabled && !emailLoginEnabled {
+		return nil, fmt.Errorf("auth:password_reset_enabled requires username or email login")
 	}
 
 	return patches, nil
@@ -658,12 +767,17 @@ func upsertPatch(patches []PatchItem, next PatchItem) []PatchItem {
 func (s *Service) validateEmbeddingDependentSettings(ctx context.Context, patches []PatchItem) error {
 	requiresValidation := false
 	for _, item := range patches {
-		if item.Namespace != "chat" {
-			continue
+		if item.Namespace == "file" {
+			switch item.Key {
+			case "embedding_enabled", "embedding_host", "rag_model":
+				requiresValidation = true
+			}
 		}
-		if (item.Key == "rag_enabled" || item.Key == "message_embedding_enabled" || item.Key == "semantic_context_enabled") && strings.EqualFold(strings.TrimSpace(item.Value), "true") {
-			requiresValidation = true
-			break
+		if item.Namespace == "chat" {
+			switch item.Key {
+			case "rag_enabled", "message_embedding_enabled", "semantic_context_enabled":
+				requiresValidation = true
+			}
 		}
 	}
 	if !requiresValidation {
@@ -676,15 +790,25 @@ func (s *Service) validateEmbeddingDependentSettings(ctx context.Context, patche
 	}
 	applyPatchesToEffectiveSettings(next, patches, "chat", "file")
 
+	embeddingEnabled, _ := strconv.ParseBool(next["file:embedding_enabled"])
 	ragEnabled, _ := strconv.ParseBool(next["chat:rag_enabled"])
 	messageEmbeddingEnabled, _ := strconv.ParseBool(next["chat:message_embedding_enabled"])
 	semanticContextEnabled, _ := strconv.ParseBool(next["chat:semantic_context_enabled"])
 	if semanticContextEnabled && !messageEmbeddingEnabled {
 		return fmt.Errorf("chat:message_embedding_enabled is required when chat:semantic_context_enabled is true")
 	}
-	if ragEnabled || messageEmbeddingEnabled || semanticContextEnabled {
+	if embeddingEnabled || ragEnabled || messageEmbeddingEnabled || semanticContextEnabled {
 		if !embeddingServiceReady(next) {
-			return fmt.Errorf("embedding service must be enabled and configured before enabling RAG or semantic enhancement")
+			return fmt.Errorf("embedding service must be enabled and configured before enabling embedding features")
+		}
+		if s.vectorStore != nil {
+			available, err := s.vectorStore.VectorStoreAvailable(ctx)
+			if err != nil {
+				return err
+			}
+			if !available {
+				return fmt.Errorf("vector store is unavailable; enable a supported vector store before enabling embedding features")
+			}
 		}
 	}
 	return nil

@@ -8,13 +8,14 @@ import type { ChatAreaMessage } from "@/features/chat/types/messages";
 import type {
   ChatModelOption,
   PendingAttachment,
-  PendingExchange,
+  PendingExchangeMap,
 } from "@/features/chat/types/chat-runtime";
 import type {
   ConversationDTO,
   ConversationOptions,
   MessageDTO,
 } from "@/shared/api/conversation.types";
+import type { SkillSummaryDTO } from "@/shared/api/skills.types";
 
 export function useChatSubmitStream({
   conversationID,
@@ -23,6 +24,7 @@ export function useChatSubmitStream({
   selectedPlatformModelName,
   modelOptions,
   selectedToolIDs,
+  selectedSkills,
   htmlVisualPromptEnabled,
   htmlVisualColorMode,
   options,
@@ -39,8 +41,8 @@ export function useChatSubmitStream({
   setDraft,
   setAttachments,
   releaseAttachments,
-  pendingExchange,
-  setPendingExchange,
+  pendingExchanges,
+  setPendingExchanges,
   setBranchSelections,
   showConversationLayout,
   setShowConversationLayout,
@@ -51,6 +53,7 @@ export function useChatSubmitStream({
   serverMessagePublicIDs,
   activeGenerationRunsRef,
   failedGenerationRunsRef,
+  resumeGenerationActive,
 }: {
   conversationID: string | null;
   resetToken: number;
@@ -58,6 +61,7 @@ export function useChatSubmitStream({
   selectedPlatformModelName: string;
   modelOptions: ChatModelOption[];
   selectedToolIDs: number[];
+  selectedSkills: SkillSummaryDTO[];
   htmlVisualPromptEnabled: boolean;
   htmlVisualColorMode: "light" | "dark";
   options: ConversationOptions;
@@ -74,8 +78,8 @@ export function useChatSubmitStream({
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   setAttachments: React.Dispatch<React.SetStateAction<PendingAttachment[]>>;
   releaseAttachments: (items: PendingAttachment[]) => void;
-  pendingExchange: PendingExchange | null;
-  setPendingExchange: React.Dispatch<React.SetStateAction<PendingExchange | null>>;
+  pendingExchanges: PendingExchangeMap;
+  setPendingExchanges: React.Dispatch<React.SetStateAction<PendingExchangeMap>>;
   setBranchSelections: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   showConversationLayout: boolean;
   setShowConversationLayout: React.Dispatch<React.SetStateAction<boolean>>;
@@ -86,9 +90,10 @@ export function useChatSubmitStream({
   serverMessagePublicIDs: Set<string>;
   activeGenerationRunsRef?: React.RefObject<Set<string>>;
   failedGenerationRunsRef?: React.RefObject<Set<string>>;
+  resumeGenerationActive?: boolean;
 }) {
   const streamBuffer = useChatStreamBuffer({
-    setPendingExchange,
+    setPendingExchanges,
   });
 
   const messageSubmit = useChatMessageSubmit({
@@ -97,6 +102,7 @@ export function useChatSubmitStream({
     selectedPlatformModelName,
     modelOptions,
     selectedToolIDs,
+    selectedSkills,
     htmlVisualPromptEnabled,
     htmlVisualColorMode,
     options,
@@ -113,8 +119,8 @@ export function useChatSubmitStream({
     setDraft,
     setAttachments,
     releaseAttachments,
-    pendingExchange,
-    setPendingExchange,
+    pendingExchanges,
+    setPendingExchanges,
     setBranchSelections,
     showConversationLayout,
     setShowConversationLayout,
@@ -123,18 +129,17 @@ export function useChatSubmitStream({
     visibleMessages,
     combinedMessages,
     serverMessagePublicIDs,
+    enqueueUpstreamThinkDelta: streamBuffer.enqueueUpstreamThinkDelta,
     enqueueStreamText: streamBuffer.enqueueStreamText,
     flushStreamTextNow: streamBuffer.flushStreamTextNow,
+    flushUpstreamThinkNow: streamBuffer.flushUpstreamThinkNow,
     resetStreamBuffer: streamBuffer.resetStreamBuffer,
     startStream: streamBuffer.startStream,
     resetToken,
     activeGenerationRunsRef,
     failedGenerationRunsRef,
+    resumeGenerationActive,
   });
 
-  return {
-    ...messageSubmit,
-    pendingExchange,
-    streamingText: pendingExchange?.assistantText ?? "",
-  };
+  return messageSubmit;
 }

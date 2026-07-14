@@ -35,7 +35,7 @@ type ProtocolOption = {
 };
 
 export const PROTOCOL_OPTIONS: ReadonlyArray<ProtocolOption> = [
-  { value: "openai_responses", label: "Responses API (OpenAI)", kinds: ["chat"] },
+  { value: "openai_responses", label: "Responses (OpenAI)", kinds: ["chat"] },
   { value: "openai_chat_completions", label: "Chat Completions (OpenAI)", kinds: ["chat"] },
   { value: "openai_image_generations", label: "Images Generations (OpenAI)", kinds: ["image_gen"] },
   { value: "openai_image_edits", label: "Images Edits (OpenAI)", kinds: ["image_edit"] },
@@ -43,9 +43,12 @@ export const PROTOCOL_OPTIONS: ReadonlyArray<ProtocolOption> = [
   { value: "anthropic_messages", label: "Messages (Anthropic)", kinds: ["chat"] },
   { value: "google_generate_content", label: "Generate Content (Google)", kinds: ["chat"] },
   { value: "google_image_generation", label: "Image Generation (Google)", kinds: ["image_gen", "image_edit"] },
+  { value: "gemini_interactions", label: "Interactions (Google)", kinds: ["chat", "image_gen", "image_edit", "video_gen"] },
   { value: "xai_responses", label: "Responses (xAI)", kinds: ["chat"] },
   { value: "xai_image", label: "Images Generations (xAI)", kinds: ["image_gen"] },
   { value: "xai_image_edits", label: "Images Edits (xAI)", kinds: ["image_edit"] },
+  { value: "openrouter_chat_completions", label: "Chat Completions (OpenRouter)", kinds: ["chat"] },
+  { value: "openrouter_responses", label: "Responses (OpenRouter)", kinds: ["chat"] },
 ] as const;
 
 const PROTOCOL_LABELS: Record<string, string> = {

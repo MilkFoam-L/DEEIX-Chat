@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -64,15 +65,6 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 	if input.TaskType != MediaImageTaskGeneration && input.TaskType != MediaImageTaskEdit {
 		return nil, ErrInvalidMediaGenerationTask
 	}
-	if strings.TrimSpace(input.Prompt) == "" {
-		return nil, ErrMediaImagePromptRequired
-	}
-	if input.TaskType == MediaImageTaskGeneration && len(input.FileIDs) > 0 {
-		return nil, ErrMediaImageGenerationRejectsInputs
-	}
-	if input.TaskType == MediaImageTaskEdit && len(input.FileIDs) == 0 {
-		return nil, ErrMediaImageEditInputRequired
-	}
 	if s.routeResolver == nil || s.llmClient == nil {
 		return nil, ErrModelRouteNotConfigured
 	}
@@ -90,14 +82,30 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 	if len(existingRuns) > 0 {
 		return nil, ErrDuplicateMessageGenerationRun
 	}
-	cancelCtx, cancel := context.WithCancel(ctx)
-	ctx = cancelCtx
-	s.generationStreams.register(ctx, runID, input.UserID, cancel)
-
 	startedAt := time.Now()
 	conversation, err := s.repo.GetConversationByUser(ctx, input.ConversationID, input.UserID)
 	if err != nil {
 		return nil, ErrConversationNotFound
+	}
+
+	normalizedBranchReason := normalizeBranchReason(input.BranchReason)
+	branchState, err := s.resolveMessageBranch(ctx, input.ConversationID, input.UserID, input.ParentMessagePublicID, input.SourceMessagePublicID, normalizedBranchReason)
+	if err != nil {
+		return nil, err
+	}
+	reuseUserMessage := branchState.ReuseUserMessage != nil
+	if reuseUserMessage {
+		input.Prompt = branchState.ReuseUserMessage.Content
+		input.FileIDs = parseAttachmentSnapshotFileIDs(branchState.ReuseUserMessage.Attachments)
+	}
+	if strings.TrimSpace(input.Prompt) == "" {
+		return nil, ErrMediaImagePromptRequired
+	}
+	if input.TaskType == MediaImageTaskGeneration && len(input.FileIDs) > 0 {
+		return nil, ErrMediaImageGenerationRejectsInputs
+	}
+	if input.TaskType == MediaImageTaskEdit && len(input.FileIDs) == 0 {
+		return nil, ErrMediaImageEditInputRequired
 	}
 
 	platformModelName := strings.TrimSpace(input.PlatformModelName)
@@ -138,13 +146,6 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 			return nil, err
 		}
 	}
-
-	normalizedBranchReason := normalizeBranchReason(input.BranchReason)
-	branchState, err := s.resolveMessageBranch(ctx, input.ConversationID, input.UserID, input.ParentMessagePublicID, input.SourceMessagePublicID, normalizedBranchReason)
-	if err != nil {
-		return nil, err
-	}
-
 	resolvedAttachments, imageEditParts, err := s.resolveMediaImageEditInputs(ctx, input)
 	if err != nil {
 		return nil, err
@@ -183,6 +184,10 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		run.TotalLatencyMS = endedAt.Sub(startedAt).Milliseconds()
 		if retErr == nil {
 			run.Status = "success"
+		} else if errors.Is(retErr, ErrMessageGenerationCanceled) {
+			run.Status = "canceled"
+			run.ErrorCode = classifyRunErrorCode(retErr)
+			run.ErrorMessage = truncateError(messageErrorSummary(retErr), 255)
 		} else {
 			run.Status = "error"
 			run.ErrorCode = classifyRunErrorCode(retErr)
@@ -196,43 +201,9 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 			)
 		}
 	}()
-
-	userMessage := &model.Message{
-		ConversationID:  input.ConversationID,
-		UserID:          input.UserID,
-		PublicID:        normalizePublicID(uuid.NewString()),
-		ParentMessageID: branchState.ParentMessageID,
-		RunID:           runID,
-		Role:            "user",
-		ContentType:     mediaImageUserContentType(input.TaskType),
-		Content:         strings.TrimSpace(input.Prompt),
-		BranchReason:    normalizedBranchReason,
-		SourceMessageID: branchState.SourceMessageID,
-		TokenUsage:      estimateTokens(input.Prompt),
-		InputTokens:     estimateTokens(input.Prompt),
-		Status:          "success",
-		Attachments:     attachmentsJSON,
-	}
-	userAttachmentRows := make([]model.Attachment, 0, len(resolvedAttachments))
-	if len(resolvedAttachments) > 0 {
-		now := time.Now()
-		for _, item := range resolvedAttachments {
-			userAttachmentRows = append(userAttachmentRows, model.Attachment{
-				ConversationID: input.ConversationID,
-				UserID:         input.UserID,
-				FileID:         strings.TrimSpace(item.FileID),
-				Kind:           normalizeAttachmentKind(item.Kind, item.MimeType),
-				FileName:       strings.TrimSpace(item.FileName),
-				MimeType:       strings.TrimSpace(item.MimeType),
-				FileSize:       item.FileSize,
-				SHA256:         strings.TrimSpace(item.SHA256),
-				StoragePath:    strings.TrimSpace(item.StoragePath),
-				Status:         "active",
-				MetaJSON:       strings.TrimSpace(item.MetaJSON),
-				UploadedAt:     now,
-			})
-		}
-	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	ctx = cancelCtx
+	s.generationStreams.register(ctx, runID, input.UserID, cancel)
 
 	assistantMessage := &model.Message{
 		ConversationID: input.ConversationID,
@@ -246,14 +217,65 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		Status:         "pending",
 		Attachments:    "[]",
 	}
-	// 媒体任务同样产生一个完整消息回合，初始本地写入必须原子提交。
-	if err = s.repo.CreateMessagePairWithUserAttachments(ctx, userMessage, assistantMessage, userAttachmentRows); err != nil {
-		retErr = err
-		return nil, err
+	var userMessage *model.Message
+	if reuseUserMessage {
+		reused := *branchState.ReuseUserMessage
+		userMessage = &reused
+		assistantMessage.ParentMessageID = &userMessage.ID
+		assistantMessage.SourceMessageID = branchState.SourceMessageID
+		if err = s.repo.CreateAssistantBranchMessage(ctx, assistantMessage); err != nil {
+			retErr = err
+			return nil, err
+		}
+		assistantMessage.ParentPublicID = userMessage.PublicID
+		assistantMessage.SourcePublicID = branchState.SourcePublicID
+	} else {
+		userMessage = &model.Message{
+			ConversationID:  input.ConversationID,
+			UserID:          input.UserID,
+			PublicID:        normalizePublicID(uuid.NewString()),
+			ParentMessageID: branchState.ParentMessageID,
+			RunID:           runID,
+			Role:            "user",
+			ContentType:     mediaImageUserContentType(input.TaskType),
+			Content:         strings.TrimSpace(input.Prompt),
+			BranchReason:    normalizedBranchReason,
+			SourceMessageID: branchState.SourceMessageID,
+			TokenUsage:      estimateTokens(input.Prompt),
+			InputTokens:     estimateTokens(input.Prompt),
+			Status:          "success",
+			Attachments:     attachmentsJSON,
+		}
+		userAttachmentRows := make([]model.Attachment, 0, len(resolvedAttachments))
+		if len(resolvedAttachments) > 0 {
+			now := time.Now()
+			for _, item := range resolvedAttachments {
+				userAttachmentRows = append(userAttachmentRows, model.Attachment{
+					ConversationID: input.ConversationID,
+					UserID:         input.UserID,
+					FileID:         strings.TrimSpace(item.FileID),
+					Kind:           normalizeAttachmentKind(item.Kind, item.MimeType),
+					FileName:       strings.TrimSpace(item.FileName),
+					MimeType:       strings.TrimSpace(item.MimeType),
+					FileSize:       item.FileSize,
+					SHA256:         strings.TrimSpace(item.SHA256),
+					StoragePath:    strings.TrimSpace(item.StoragePath),
+					Status:         "active",
+					MetaJSON:       strings.TrimSpace(item.MetaJSON),
+					UploadedAt:     now,
+				})
+			}
+		}
+
+		// 媒体任务同样产生一个完整消息回合，初始本地写入必须原子提交。
+		if err = s.repo.CreateMessagePairWithUserAttachments(ctx, userMessage, assistantMessage, userAttachmentRows); err != nil {
+			retErr = err
+			return nil, err
+		}
+		userMessage.ParentPublicID = branchState.ParentPublicID
+		userMessage.SourcePublicID = branchState.SourcePublicID
+		assistantMessage.ParentPublicID = userMessage.PublicID
 	}
-	userMessage.ParentPublicID = branchState.ParentPublicID
-	userMessage.SourcePublicID = branchState.SourcePublicID
-	assistantMessage.ParentPublicID = userMessage.PublicID
 	traceRecorder := newMessageTraceRecorder(s, ctx, assistantMessage, input.OnEvent)
 	defer func() {
 		if retErr != nil && traceRecorder != nil {
@@ -284,6 +306,24 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		DeniedPathsJSON:       cfg.ModelOptionDeniedPaths,
 		ModelCapabilitiesJSON: route.ModelCapabilitiesJSON,
 	})
+	if llm.NormalizeAdapter(route.Protocol) == llm.AdapterGeminiInteractions {
+		filteredOptions = withGeminiInteractionResponseType(filteredOptions, "image")
+		routeConfig.Endpoint = llm.EndpointInteractions
+		run.Endpoint = llm.EndpointInteractions
+	}
+	buildBillableFailure := func(failure error, usage llm.Usage) *SendMessageResult {
+		result := buildFailedMediaBillingResult(failedMediaBillingResultInput{
+			UserMessage:      userMessage,
+			AssistantMessage: assistantMessage,
+			Route:            *route,
+			EffectiveOptions: filteredOptions,
+			Usage:            usage,
+			StartedAt:        startedAt,
+			Failure:          failure,
+		})
+		applyMediaRunUsage(run, result)
+		return result
+	}
 
 	emitMediaEvent(input.OnEvent, "running", mediaImageRunningMessage(input.TaskType))
 	generateInput := llm.GenerateInput{
@@ -331,6 +371,26 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		output, err = s.llmClient.Generate(ctx, routeConfig, generateInput)
 	}
 	if err != nil {
+		if s.isCanceledMediaGeneration(ctx, runID, err) {
+			retErr = ErrMessageGenerationCanceled
+			result, cancelErr := s.completeCanceledMediaGeneration(canceledMediaGenerationInput{
+				Context:          ctx,
+				Conversation:     conversation,
+				UserMessage:      userMessage,
+				AssistantMessage: assistantMessage,
+				ReuseUserMessage: reuseUserMessage,
+				Route:            *route,
+				EffectiveOptions: filteredOptions,
+				GenerateInput:    generateInput,
+				StartedAt:        startedAt,
+			})
+			if cancelErr != nil {
+				retErr = cancelErr
+				return nil, cancelErr
+			}
+			applyMediaRunUsage(run, result)
+			return result, nil
+		}
 		s.routeResolver.MarkRouteFailure(ctx, route, err)
 		retErr = wrapUpstreamRequestError(err)
 		_ = s.repo.UpdateMessageState(ctx, assistantMessage.ID, "error", classifyRunErrorCode(retErr), truncateError(messageErrorSummary(retErr), 255))
@@ -340,7 +400,7 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 	if output == nil || len(output.GeneratedImages) == 0 {
 		retErr = ErrUpstreamEmptyResponse
 		_ = s.repo.UpdateMessageState(ctx, assistantMessage.ID, "error", classifyRunErrorCode(retErr), truncateError(messageErrorSummary(retErr), 255))
-		return nil, retErr
+		return buildBillableFailure(retErr, mediaOutputUsage(output)), retErr
 	}
 
 	emitMediaEvent(input.OnEvent, "saving_artifact", "saving image")
@@ -352,7 +412,7 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		if readErr != nil {
 			retErr = readErr
 			_ = s.repo.UpdateMessageState(ctx, assistantMessage.ID, "error", classifyRunErrorCode(retErr), truncateError(messageErrorSummary(retErr), 255))
-			return nil, readErr
+			return buildBillableFailure(readErr, output.Usage), readErr
 		}
 		fileName := generatedImageFileName(route.PlatformModelName, now, i, len(output.GeneratedImages), mimeType)
 		uploadResult, uploadErr := s.UploadFile(ctx, appupload.UploadFileInput{
@@ -366,7 +426,7 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		if uploadErr != nil {
 			retErr = uploadErr
 			_ = s.repo.UpdateMessageState(ctx, assistantMessage.ID, "error", classifyRunErrorCode(retErr), truncateError(messageErrorSummary(retErr), 255))
-			return nil, uploadErr
+			return buildBillableFailure(uploadErr, output.Usage), uploadErr
 		}
 		file := uploadResult.File
 		uploaded = append(uploaded, file)
@@ -386,39 +446,69 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 		})
 	}
 	usage := output.Usage
-	userMessage.InputTokens = usage.InputTokens
-	userMessage.CacheReadTokens = usage.CacheReadTokens
-	userMessage.CacheWriteTokens = usage.CacheWriteTokens
-	userMessage.TokenUsage = usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
+	if reuseUserMessage {
+		assistantMessage.InputTokens = usage.InputTokens
+		assistantMessage.CacheReadTokens = usage.CacheReadTokens
+		assistantMessage.CacheWriteTokens = usage.CacheWriteTokens
+	} else {
+		userMessage.InputTokens = usage.InputTokens
+		userMessage.CacheReadTokens = usage.CacheReadTokens
+		userMessage.CacheWriteTokens = usage.CacheWriteTokens
+		userMessage.TokenUsage = usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
+	}
 
 	content := generatedImageMarkdown(uploaded)
 	latencyMS := time.Since(startedAt).Milliseconds()
 	// 上游与文件上传已完成后，数据库侧的附件、用量和完成态仍需保持原子一致。
-	if err = s.repo.CompleteAssistantMessageWithAttachments(ctx,
-		userMessage.ID,
-		repository.MessageUsageUpdate{
-			InputTokens:      usage.InputTokens,
-			CacheReadTokens:  usage.CacheReadTokens,
-			CacheWriteTokens: usage.CacheWriteTokens,
-		},
-		assistantMessage.ID,
-		repository.AssistantMessageCompletionUpdate{
-			ContentType:     "image",
-			Content:         content,
-			OutputTokens:    usage.OutputTokens,
-			ReasoningTokens: usage.ReasoningTokens,
-			LatencyMS:       latencyMS,
-			Status:          "success",
-		},
-		attachmentRows,
-	); err != nil {
-		retErr = err
-		return nil, err
+	if reuseUserMessage {
+		if err = s.repo.CompleteAssistantMessageWithGeneratedAttachments(ctx,
+			assistantMessage.ID,
+			repository.AssistantMessageCompletionUpdate{
+				ContentType:      "image",
+				Content:          content,
+				InputTokens:      usage.InputTokens,
+				OutputTokens:     usage.OutputTokens,
+				CacheReadTokens:  usage.CacheReadTokens,
+				CacheWriteTokens: usage.CacheWriteTokens,
+				ReasoningTokens:  usage.ReasoningTokens,
+				LatencyMS:        latencyMS,
+				Status:           "success",
+			},
+			attachmentRows,
+		); err != nil {
+			retErr = err
+			return buildBillableFailure(err, output.Usage), err
+		}
+	} else {
+		if err = s.repo.CompleteAssistantMessageWithAttachments(ctx,
+			userMessage.ID,
+			repository.MessageUsageUpdate{
+				InputTokens:      usage.InputTokens,
+				CacheReadTokens:  usage.CacheReadTokens,
+				CacheWriteTokens: usage.CacheWriteTokens,
+			},
+			assistantMessage.ID,
+			repository.AssistantMessageCompletionUpdate{
+				ContentType:     "image",
+				Content:         content,
+				OutputTokens:    usage.OutputTokens,
+				ReasoningTokens: usage.ReasoningTokens,
+				LatencyMS:       latencyMS,
+				Status:          "success",
+			},
+			attachmentRows,
+		); err != nil {
+			retErr = err
+			return buildBillableFailure(err, output.Usage), err
+		}
 	}
 	assistantMessage.Content = content
 	assistantMessage.OutputTokens = usage.OutputTokens
 	assistantMessage.ReasoningTokens = usage.ReasoningTokens
 	assistantMessage.TokenUsage = assistantMessage.OutputTokens + assistantMessage.ReasoningTokens
+	if reuseUserMessage {
+		assistantMessage.TokenUsage += usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
+	}
 	assistantMessage.LatencyMS = latencyMS
 	assistantMessage.Status = "success"
 	assistantMessage.Attachments = string(marshalAttachmentSnapshots(attachmentsFromFiles(uploaded)))
@@ -427,25 +517,35 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 	run.CacheReadTokens = usage.CacheReadTokens
 	run.CacheWriteTokens = usage.CacheWriteTokens
 	run.ReasoningTokens = usage.ReasoningTokens
-	// 图片会话首轮没有文本 assistant 回复，标题/标签只使用用户第一条气泡内容生成。
-	s.maybeGenerateConversationMetadataAsync(*conversation, *userMessage, model.Message{})
 
 	return &SendMessageResult{
-		UserMessage:        *userMessage,
-		AssistantMessage:   *assistantMessage,
-		UpstreamID:         route.UpstreamID,
-		UpstreamName:       route.UpstreamName,
-		PlatformModelName:  route.PlatformModelName,
-		RoutedBindingCode:  route.BindingCode,
-		UpstreamModelName:  route.UpstreamModel,
-		UpstreamProtocol:   route.Protocol,
-		EffectiveOptions:   filteredOptions,
-		UsageSpeed:         usage.Speed,
-		UsageServiceTier:   usage.ServiceTier,
-		CacheWrite5mTokens: usage.CacheWrite5mTokens,
-		CacheWrite1hTokens: usage.CacheWrite1hTokens,
-		LatencyMS:          latencyMS,
+		UserMessage:         *userMessage,
+		AssistantMessage:    *assistantMessage,
+		MetadataRefreshHint: conversationMetadataRefreshHint(*conversation, *userMessage),
+		Billable:            true,
+		UpstreamID:          route.UpstreamID,
+		UpstreamName:        route.UpstreamName,
+		PlatformModelName:   route.PlatformModelName,
+		RoutedBindingCode:   route.BindingCode,
+		UpstreamModelName:   route.UpstreamModel,
+		UpstreamProtocol:    route.Protocol,
+		EffectiveOptions:    filteredOptions,
+		UsageSpeed:          usage.Speed,
+		UsageServiceTier:    usage.ServiceTier,
+		RawUsageJSON:        usage.RawUsageJSON,
+		CacheWrite5mTokens:  usage.CacheWrite5mTokens,
+		CacheWrite1hTokens:  usage.CacheWrite1hTokens,
+		LatencyMS:           latencyMS,
+		StartedAt:           startedAt,
 	}, nil
+}
+
+// mediaOutputUsage 安全提取允许为空的媒体响应 usage。
+func mediaOutputUsage(output *llm.GenerateOutput) llm.Usage {
+	if output == nil {
+		return llm.Usage{}
+	}
+	return output.Usage
 }
 
 func mediaImageUserContentType(taskType MediaImageTaskType) string {
@@ -538,14 +638,18 @@ func (s *Service) readMediaImageEditFile(ctx context.Context, userID uint, fileI
 }
 
 // emitMediaEvent 输出媒体任务状态事件；失败不影响主流程。
-func emitMediaEvent(onEvent func(string, map[string]interface{}) error, status string, message string) {
+func emitMediaEvent(onEvent func(string, map[string]interface{}) error, status string, message string, contentType ...string) {
 	if onEvent == nil {
 		return
 	}
-	_ = onEvent("media_status", map[string]interface{}{
+	payload := map[string]interface{}{
 		"status":  status,
 		"message": message,
-	})
+	}
+	if len(contentType) > 0 && strings.TrimSpace(contentType[0]) != "" {
+		payload["content_type"] = strings.TrimSpace(contentType[0])
+	}
+	_ = onEvent("media_status", payload)
 }
 
 func emitMediaImageDelta(onEvent func(string, map[string]interface{}) error, event llm.GenerateStreamEvent) error {
@@ -566,6 +670,28 @@ func emitMediaImageDelta(onEvent func(string, map[string]interface{}) error, eve
 
 func mediaImageStreamEnabled(protocol string, upstreamModel string, capabilitiesJSON string) bool {
 	return llm.SupportsImageGenerationStream(protocol, upstreamModel) && !mediaImageStreamExplicitlyDisabled(capabilitiesJSON)
+}
+
+func withGeminiInteractionResponseType(options map[string]interface{}, responseType string) map[string]interface{} {
+	next := make(map[string]interface{}, len(options)+1)
+	for key, value := range options {
+		next[key] = value
+	}
+	format := map[string]interface{}{}
+	if raw, ok := next["response_format"].(map[string]interface{}); ok {
+		for key, value := range raw {
+			format[key] = value
+		}
+	}
+	if raw, ok := next["responseFormat"].(map[string]interface{}); ok {
+		for key, value := range raw {
+			format[key] = value
+		}
+		delete(next, "responseFormat")
+	}
+	format["type"] = strings.TrimSpace(responseType)
+	next["response_format"] = format
+	return next
 }
 
 func mediaImageStreamExplicitlyDisabled(capabilitiesJSON string) bool {
@@ -598,6 +724,9 @@ func (s *Service) readGeneratedImage(ctx context.Context, image llm.GeneratedIma
 	if url == "" {
 		return nil, mimeType, ErrUpstreamEmptyResponse
 	}
+	if isGeminiFilesURL(url) {
+		return nil, mimeType, fmt.Errorf("Gemini Files generated image URI is not supported")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, mimeType, err
@@ -615,7 +744,7 @@ func (s *Service) readGeneratedImage(ctx context.Context, image llm.GeneratedIma
 	if contentType := strings.TrimSpace(resp.Header.Get("Content-Type")); strings.HasPrefix(strings.ToLower(contentType), "image/") {
 		mimeType = strings.Split(contentType, ";")[0]
 	}
-	limit := s.cfg.Snapshot().MaxUploadFileBytes
+	limit := cfg.MaxUploadFileBytes
 	if limit <= 0 {
 		limit = 20 * 1024 * 1024
 	}

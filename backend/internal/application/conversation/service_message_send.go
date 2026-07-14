@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/channel"
+	appcompact "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/compact"
 	apprag "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/rag"
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	domainmemory "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/memory"
@@ -20,6 +21,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
+
+const reasoningContentPassbackSettingKey = "chat.reasoning_content_passback"
 
 // SendMessage 发送消息并调用上游渠道对话接口，支持多模态附件。
 func (s *Service) SendMessage(ctx context.Context, input SendMessageInput) (result *SendMessageResult, retErr error) {
@@ -36,6 +39,14 @@ func (s *Service) StreamMessage(
 	input.Cancelable = true
 	ctx = context.WithoutCancel(ctx)
 	return s.sendMessageInternal(ctx, input, onDelta, true)
+}
+
+func (s *Service) reasoningContentPassbackEnabled(ctx context.Context, userID uint, route *channel.ResolvedRoute) bool {
+	if route == nil || !route.ReasoningContentPassback {
+		return false
+	}
+	value, err := s.getUserSettingCached(ctx, userID, reasoningContentPassbackSettingKey)
+	return err == nil && value != "false"
 }
 
 // emitEvent 统一处理可选事件回调，调用方无需重复判断 nil。
@@ -147,9 +158,6 @@ func (s *Service) sendMessageInternal(
 	if maxFiles <= 0 {
 		maxFiles = 10
 	}
-	if len(input.FileIDs) > maxFiles {
-		return nil, ErrTooManyMessageFiles
-	}
 	// application 层保留兜底校验，保证非 HTTP 调用路径也遵守同一 MCP 工具数量策略。
 	if err := s.ValidateSelectedToolIDs(input.SelectedToolIDs); err != nil {
 		return nil, err
@@ -159,11 +167,6 @@ func (s *Service) sendMessageInternal(
 	runID := normalizeRunID(input.ClientRunID)
 	if runID == "" {
 		runID = "run_" + normalizePublicID(uuid.NewString())
-	}
-	if input.Cancelable {
-		cancelCtx, cancel := context.WithCancel(ctx)
-		ctx = cancelCtx
-		s.generationStreams.register(ctx, runID, input.UserID, cancel)
 	}
 
 	conversation, err := s.repo.GetConversationByUser(ctx, input.ConversationID, input.UserID)
@@ -176,6 +179,19 @@ func (s *Service) sendMessageInternal(
 	if err != nil {
 		retErr = err
 		return nil, err
+	}
+	reuseUserMessage := branchState.ReuseUserMessage != nil
+	if reuseUserMessage {
+		input.Content = branchState.ReuseUserMessage.Content
+		input.FileIDs = parseAttachmentSnapshotFileIDs(branchState.ReuseUserMessage.Attachments)
+	}
+	if len(input.FileIDs) > maxFiles {
+		return nil, ErrTooManyMessageFiles
+	}
+	if input.Cancelable {
+		cancelCtx, cancel := context.WithCancel(ctx)
+		ctx = cancelCtx
+		s.generationStreams.register(ctx, runID, input.UserID, cancel)
 	}
 
 	currentPlatformModelName := strings.TrimSpace(conversation.Model)
@@ -194,32 +210,47 @@ func (s *Service) sendMessageInternal(
 	var assistantMessage *model.Message
 	var traceRecorder *messageTraceRecorder
 	var streamedText strings.Builder
-	var streamUsageTotal llm.Usage
 	var toolCallRows []model.ToolCall
+	var persistedToolCallKeys map[string]struct{}
 	var resolvedRoute *channel.ResolvedRoute
 	var filteredOptions map[string]interface{}
 	var totalServerSideToolUsage map[string]int64
-	estimatedInputTokens := int64(0)
+	var responsesBackgroundRouteConfig llm.RouteConfig
+	var responsesBackgroundRecovery openAIResponsesBackgroundRecoveryState
+	userContentEstimatedInputTokens := int64(0)
+	usageAccumulator := &messageUsageAccumulator{}
+	upstreamCallStarted := false
 	runState := newMessageSendRunState(s, input, conversation, startedAt, runID)
 	run := runState.run
+	runState.reuseUserMessage = reuseUserMessage
 	runState.bind(&userMessage, &assistantMessage, &traceRecorder, &result, ctx)
 	defer func() {
 		if retErr != nil {
+			if errors.Is(retErr, ErrMessageGenerationCanceled) {
+				if usage, ok := s.recoverOpenAIResponsesBackgroundUsage(responsesBackgroundRouteConfig, responsesBackgroundRecovery); ok {
+					if delta := diffLLMUsage(usage, responsesBackgroundRecovery.ObservedUsage); delta != (llm.Usage{}) {
+						usageAccumulator.addObservedUsage(delta)
+					}
+				}
+			}
 			if retained := s.persistInterruptedMessageGeneration(ctx, persistInterruptedMessageGenerationInput{
-				SendInput:            input,
-				UserMessage:          userMessage,
-				AssistantMessage:     assistantMessage,
-				AssistantText:        streamedText.String(),
-				EstimatedInputTokens: estimatedInputTokens,
-				Usage:                streamUsageTotal,
-				AssistantLatency:     time.Since(startedAt).Milliseconds(),
-				Error:                retErr,
-				ToolCallRows:         toolCallRows,
-				TraceRecorder:        traceRecorder,
-				Route:                resolvedRoute,
-				EffectiveOptions:     filteredOptions,
-				ServerSideToolUsage:  totalServerSideToolUsage,
-				StartedAt:            startedAt,
+				SendInput:             input,
+				UserMessage:           userMessage,
+				AssistantMessage:      assistantMessage,
+				AssistantText:         streamedText.String(),
+				EstimatedInputTokens:  usageAccumulator.interruptedInputTokens(),
+				UpstreamCallStarted:   upstreamCallStarted,
+				Usage:                 usageAccumulator.usage(),
+				AssistantLatency:      time.Since(startedAt).Milliseconds(),
+				Error:                 retErr,
+				ToolCallRows:          toolCallRows,
+				PersistedToolCallKeys: persistedToolCallKeys,
+				TraceRecorder:         traceRecorder,
+				Route:                 resolvedRoute,
+				EffectiveOptions:      filteredOptions,
+				ServerSideToolUsage:   totalServerSideToolUsage,
+				StartedAt:             startedAt,
+				ReuseUserMessage:      reuseUserMessage,
 			}); retained != nil {
 				result = retained
 				applyRetainedGenerationRunUsage(run, retained, len(toolCallRows), startedAt)
@@ -236,6 +267,7 @@ func (s *Service) sendMessageInternal(
 				AssistantMessage: *assistantMessage,
 				Billable:         false,
 				LatencyMS:        latencyMS,
+				StartedAt:        startedAt,
 			}
 			if resolvedRoute != nil {
 				result.UpstreamID = resolvedRoute.UpstreamID
@@ -254,51 +286,7 @@ func (s *Service) sendMessageInternal(
 		return nil, err
 	}
 
-	attachmentsJSON := []byte(marshalAttachmentSnapshots(resolvedAttachments))
-
-	estimatedInputTokens = estimateTokens(input.Content)
-	userMessage = &model.Message{
-		ConversationID:   input.ConversationID,
-		UserID:           input.UserID,
-		PublicID:         normalizePublicID(uuid.NewString()),
-		ParentMessageID:  branchState.ParentMessageID,
-		RunID:            runID,
-		Role:             "user",
-		ContentType:      fallbackContentType(input.ContentType),
-		Content:          input.Content,
-		BranchReason:     normalizedBranchReason,
-		SourceMessageID:  branchState.SourceMessageID,
-		TokenUsage:       estimatedInputTokens,
-		InputTokens:      estimatedInputTokens,
-		OutputTokens:     0,
-		CacheReadTokens:  0,
-		CacheWriteTokens: 0,
-		ReasoningTokens:  0,
-		LatencyMS:        0,
-		Status:           "pending",
-		ErrorCode:        "",
-		ErrorMessage:     "",
-		Attachments:      string(attachmentsJSON),
-	}
-	attachmentRows := make([]model.Attachment, 0, len(resolvedAttachments))
-	now := time.Now()
-	for _, item := range resolvedAttachments {
-		attachmentRows = append(attachmentRows, model.Attachment{
-			ConversationID: input.ConversationID,
-			UserID:         input.UserID,
-			FileID:         strings.TrimSpace(item.FileID),
-			Kind:           normalizeAttachmentKind(item.Kind, item.MimeType),
-			FileName:       strings.TrimSpace(item.FileName),
-			MimeType:       strings.TrimSpace(item.MimeType),
-			FileSize:       item.FileSize,
-			SHA256:         strings.TrimSpace(item.SHA256),
-			StoragePath:    strings.TrimSpace(item.StoragePath),
-			Status:         "active",
-			MetaJSON:       strings.TrimSpace(item.MetaJSON),
-			UploadedAt:     now,
-		})
-	}
-
+	userContentEstimatedInputTokens = estimateTokens(input.Content)
 	assistantMessage = &model.Message{
 		ConversationID:   input.ConversationID,
 		UserID:           input.UserID,
@@ -320,14 +308,70 @@ func (s *Service) sendMessageInternal(
 		ErrorMessage:     "",
 		Attachments:      "[]",
 	}
-	// 用户消息、助手占位、用户附件与消息计数必须一起提交，避免失败时留下半个回合。
-	if err = s.repo.CreateMessagePairWithUserAttachments(ctx, userMessage, assistantMessage, attachmentRows); err != nil {
-		retErr = err
-		return nil, err
+	if reuseUserMessage {
+		reused := *branchState.ReuseUserMessage
+		userMessage = &reused
+		assistantMessage.ParentMessageID = &userMessage.ID
+		assistantMessage.SourceMessageID = branchState.SourceMessageID
+		if err = s.repo.CreateAssistantBranchMessage(ctx, assistantMessage); err != nil {
+			retErr = err
+			return nil, err
+		}
+		assistantMessage.ParentPublicID = userMessage.PublicID
+		assistantMessage.SourcePublicID = branchState.SourcePublicID
+	} else {
+		attachmentsJSON := []byte(marshalAttachmentSnapshots(resolvedAttachments))
+		userMessage = &model.Message{
+			ConversationID:   input.ConversationID,
+			UserID:           input.UserID,
+			PublicID:         normalizePublicID(uuid.NewString()),
+			ParentMessageID:  branchState.ParentMessageID,
+			RunID:            runID,
+			Role:             "user",
+			ContentType:      fallbackContentType(input.ContentType),
+			Content:          input.Content,
+			BranchReason:     normalizedBranchReason,
+			SourceMessageID:  branchState.SourceMessageID,
+			TokenUsage:       userContentEstimatedInputTokens,
+			InputTokens:      userContentEstimatedInputTokens,
+			OutputTokens:     0,
+			CacheReadTokens:  0,
+			CacheWriteTokens: 0,
+			ReasoningTokens:  0,
+			LatencyMS:        0,
+			Status:           "pending",
+			ErrorCode:        "",
+			ErrorMessage:     "",
+			Attachments:      string(attachmentsJSON),
+		}
+		attachmentRows := make([]model.Attachment, 0, len(resolvedAttachments))
+		now := time.Now()
+		for _, item := range resolvedAttachments {
+			attachmentRows = append(attachmentRows, model.Attachment{
+				ConversationID: input.ConversationID,
+				UserID:         input.UserID,
+				FileID:         strings.TrimSpace(item.FileID),
+				Kind:           normalizeAttachmentKind(item.Kind, item.MimeType),
+				FileName:       strings.TrimSpace(item.FileName),
+				MimeType:       strings.TrimSpace(item.MimeType),
+				FileSize:       item.FileSize,
+				SHA256:         strings.TrimSpace(item.SHA256),
+				StoragePath:    strings.TrimSpace(item.StoragePath),
+				Status:         "active",
+				MetaJSON:       strings.TrimSpace(item.MetaJSON),
+				UploadedAt:     now,
+			})
+		}
+
+		// 用户消息、助手占位、用户附件与消息计数必须一起提交，避免失败时留下半个回合。
+		if err = s.repo.CreateMessagePairWithUserAttachments(ctx, userMessage, assistantMessage, attachmentRows); err != nil {
+			retErr = err
+			return nil, err
+		}
+		userMessage.ParentPublicID = branchState.ParentPublicID
+		userMessage.SourcePublicID = branchState.SourcePublicID
+		assistantMessage.ParentPublicID = userMessage.PublicID
 	}
-	userMessage.ParentPublicID = branchState.ParentPublicID
-	userMessage.SourcePublicID = branchState.SourcePublicID
-	assistantMessage.ParentPublicID = userMessage.PublicID
 	traceRecorder = newMessageTraceRecorder(s, ctx, assistantMessage, input.OnEvent)
 
 	if s.routeResolver == nil || s.llmClient == nil {
@@ -344,7 +388,11 @@ func (s *Service) sendMessageInternal(
 		RequestID:         strings.TrimSpace(input.RequestID),
 	})
 	if err != nil {
-		if errors.Is(err, channel.ErrRouteNotFound) || errors.Is(err, channel.ErrModelNotFound) || errors.Is(err, channel.ErrModelAccessDenied) {
+		if errors.Is(err, channel.ErrModelAccessDenied) {
+			retErr = ErrModelAccessDenied
+			return nil, retErr
+		}
+		if errors.Is(err, channel.ErrRouteNotFound) || errors.Is(err, channel.ErrModelNotFound) {
 			retErr = ErrModelRouteNotConfigured
 			return nil, retErr
 		}
@@ -356,6 +404,7 @@ func (s *Service) sendMessageInternal(
 		return nil, err
 	}
 	resolvedRoute = route
+	reasoningContentPassback := s.reasoningContentPassbackEnabled(ctx, input.UserID, route)
 	if modelChanged || strings.TrimSpace(conversation.Model) != strings.TrimSpace(route.PlatformModelName) {
 		conversation.Model = strings.TrimSpace(route.PlatformModelName)
 		conversation.Provider = inferProvider(conversation.Model)
@@ -378,13 +427,12 @@ func (s *Service) sendMessageInternal(
 		run.Provider = inferProvider(conversation.Model)
 	}
 
-	// 构建上下文消息路径：使用祖先链查询，并按路由后的模型能力预算截断。
-	contextMessages := s.buildContextMessagesFromBranch(ctx, input.ConversationID, branchState, userMessage, route.UpstreamModel, route.ModelCapabilitiesJSON)
-	ragQuery := buildRAGQuery(contextMessages, input.Content, s.cfg.Snapshot().RAGQueryHistoryTurns)
+	// 构建完整活跃分支路径；压缩裁剪先于模型预算截断，避免摘要和全量历史重复发送。
+	contextMessages := buildBranchMessagePath(branchState, userMessage)
 	cfg := s.cfg.Snapshot()
+	compactPolicy := s.resolveContextCompactionPolicy(ctx, cfg, input.UserID)
 
-	// 并行预取：Snapshot + UserMemory 在附件处理期间并行完成，隐藏 DB 延迟。
-	// 附件处理（hydrateAttachmentsForSend）最多需要 3s，预取 <100ms 必然先完成。
+	// 并行预取：Snapshot + UserMemory 提前加载，隐藏 DB 延迟。
 	type prefetchData struct {
 		snapshot     *model.ContextSnapshot
 		userMemories []domainmemory.UserMemory
@@ -392,7 +440,9 @@ func (s *Service) sendMessageInternal(
 	prefetchCh := make(chan prefetchData, 1)
 	go func() {
 		var r prefetchData
-		r.snapshot, _ = s.getCachedSnapshot(ctx, input.ConversationID)
+		if compactPolicy.EffectiveEnabled() {
+			r.snapshot, _ = s.getCachedSnapshot(ctx, input.ConversationID)
+		}
 		if s.memoryRecorder != nil {
 			r.userMemories, _ = s.getCachedUserMemories(ctx, input.UserID)
 		}
@@ -419,7 +469,14 @@ func (s *Service) sendMessageInternal(
 		fileMode = fm
 	}
 
-	conversationFileIDs := collectConversationFileIDs(contextMessages, input.FileIDs)
+	// 收集并行预取结果，再规划本轮可发送的 PromptScope。
+	prefetch := <-prefetchCh
+	contextMessages = s.expandContextMessagesToSnapshotBoundary(ctx, input.ConversationID, userMessage.ID, contextMessages, prefetch.snapshot, compactPolicy)
+	promptScope := buildPromptScope(contextMessages, prefetch.snapshot, compactPolicy)
+	promptMessages := s.applyContextTokenBudget(promptScope.activeMessages(), route.UpstreamModel, route.ModelCapabilitiesJSON, reasoningContentPassback)
+	ragQuery := buildRAGQuery(promptMessages, input.Content, cfg.RAGQueryHistoryTurns)
+
+	conversationFileIDs := collectConversationFileIDs(promptMessages, input.FileIDs)
 	conversationAttachments, err := s.resolveConversationFileContext(ctx, input.UserID, conversationFileIDs, input.FileIDs)
 	if err != nil {
 		retErr = err
@@ -434,20 +491,11 @@ func (s *Service) sendMessageInternal(
 	userMessage.Attachments = marshalAttachmentSnapshots(currentAttachments)
 
 	fileContextPlan := buildConversationFileContextPlan(conversationAttachments, fileMode, cfg, route.UpstreamModel, route.ModelCapabilitiesJSON, capability.RAGAvailable)
-	// 收集并行预取结果（附件处理已耗时 >100ms，预取此时必然已就绪，等待开销接近零）。
-	prefetch := <-prefetchCh
 
 	// 构建历史消息序列（不含系统注入）
-	historyMsgs := make([]llm.Message, 0, len(contextMessages)+1)
-	for _, item := range contextMessages {
-		if item.Role != "user" && item.Role != "assistant" && item.Role != "system" {
-			continue
-		}
-		historyMsgs = append(historyMsgs, llm.Message{
-			Role:    item.Role,
-			Content: item.Content,
-		})
-	}
+	historyMsgs := historyMessagesFromDomain(promptMessages, historyMessageOptions{
+		ReasoningContentPassback: reasoningContentPassback,
+	})
 	if len(historyMsgs) == 0 {
 		historyMsgs = append(historyMsgs, llm.Message{
 			Role:    "user",
@@ -467,13 +515,13 @@ func (s *Service) sendMessageInternal(
 	}
 	userCtx := userContextInput{}
 	var prefixMemories []domainmemory.UserMemory
-	if prefetch.snapshot != nil {
-		if snapshotSummary := strings.TrimSpace(prefetch.snapshot.SummaryText); snapshotSummary != "" {
+	if promptScope.Snapshot != nil {
+		if snapshotSummary := strings.TrimSpace(promptScope.Snapshot.SummaryText); snapshotSummary != "" {
 			userCtx.Snapshot = &snapshotContext{
 				Summary:  snapshotSummary,
-				FromTurn: prefetch.snapshot.FromTurn,
-				ToTurn:   prefetch.snapshot.ToTurn,
-				Strategy: prefetch.snapshot.Strategy,
+				FromTurn: promptScope.Snapshot.FromTurn,
+				ToTurn:   promptScope.Snapshot.ToTurn,
+				Strategy: promptScope.Snapshot.Strategy,
 			}
 		}
 	}
@@ -491,7 +539,7 @@ func (s *Service) sendMessageInternal(
 		}
 	}
 	llmMessages, _ := assembler.Assemble(historyMsgs)
-	if traceRecorder != nil {
+	if traceRecorder != nil && shouldShowAttachmentProcessTrace(fileContextPlan.Attachments) {
 		summary, markdown, payload := buildAttachmentProcessTrace(fileMode, fileContextPlan.Attachments)
 		traceRecorder.appendProcessSection(summary, markdown, payload, messageTraceStatusStreaming)
 	}
@@ -611,12 +659,15 @@ func (s *Service) sendMessageInternal(
 	//   - 有附件时 goroutine 早已完成（附件处理 >1s >> 200ms），等待开销为零。
 	if recallCh != nil {
 		recalled := <-recallCh // 阻塞等待，最多 semanticRecallDeadline（200ms）
-		userCtx.RecallChunks = recalled
+		userCtx.RecallChunks = promptScope.filterRecallChunks(recalled)
 	}
 	userCtx.HistoricalArtifacts = s.recallHistoricalContextArtifacts(
 		ctx,
 		input.ConversationID,
 		userMessage.ID,
+		promptScope.Snapshot != nil,
+		promptScope.CoveredUntilID,
+		promptScope.retainedMessageIDSet(),
 		input.Content,
 		ragContextChunks,
 		ragFallbackEvidenceAttachments(ragFallbacks),
@@ -633,17 +684,41 @@ func (s *Service) sendMessageInternal(
 		RecallChunks:   userCtx.RecallChunks,
 		Memories:       userCtx.Memory,
 	})
+	skillPrompts, err := s.resolveSkillPrompts(ctx, input)
+	if err != nil {
+		retErr = err
+		return nil, err
+	}
+	if traceRecorder != nil && skillPrompts != nil {
+		skillTitles := skillPromptTitles(skillPrompts.Skills)
+		traceRecorder.appendProcessSection(
+			fmt.Sprintf("已提供 %d 个 Skill 上下文", len(skillPrompts.Skills)),
+			formatTraceStep("Skill", fmt.Sprintf("本轮已加载 Skill：%s。包含 SKILL.md 内容，相关时使用。", strings.Join(skillTitles, "、"))),
+			map[string]interface{}{
+				processTracePayloadStage: map[string]interface{}{
+					"kind":   "skill_context",
+					"status": messageTraceStatusStreaming,
+				},
+				"skill_count":    len(skillPrompts.Skills),
+				"skill_ids":      skillPromptIDs(skillPrompts.Skills),
+				"skill_titles":   skillTitles,
+				"skill_triggers": skillPromptTriggers(skillPrompts.Skills),
+			},
+			messageTraceStatusStreaming,
+		)
+	}
 	toolRuntime := s.resolveSelectedToolRuntime(ctx, input.SelectedToolIDs)
 	promptPlan := buildPromptPlan(ctx, promptPlanInput{
 		BaseMessages:      llmMessages,
 		StableAttachments: stableFullContextAttachments,
 		DynamicContext:    userCtx,
+		SkillPrompts:      skillPrompts,
 		ToolRuntime:       toolRuntime,
 		Config:            cfg,
 		StoreProvider:     s.storeProvider,
 	})
 	llmMessages = promptPlan.Messages
-	estimatedPromptTokens := estimatePromptTokens(llmMessages)
+	estimatedPromptTokens := int64(0)
 
 	attributionReferer, attributionTitle := s.llmAttribution()
 	routeConfig := llm.RouteConfig{
@@ -659,6 +734,7 @@ func (s *Service) sendMessageInternal(
 		AttributionReferer:  attributionReferer,
 		AttributionTitle:    attributionTitle,
 	}
+	responsesBackgroundRouteConfig = routeConfig
 	filteredOptions = filterModelOptions(input.Options, route.Protocol, modelOptionPolicyConfig{
 		Mode:                  cfg.ModelOptionPolicyMode,
 		AllowedPathsJSON:      cfg.ModelOptionAllowedPaths,
@@ -672,7 +748,13 @@ func (s *Service) sendMessageInternal(
 		Tools:          toolRuntime.definitions,
 		Options:        filteredOptions,
 	}
+	if supportsOpenAIResponsesBackgroundMode(route) {
+		generateInput.ResponsesBackground = true
+		sendSpan.SetAttributes(attribute.Bool("conversation.responses_background", true))
+	}
 	fullLLMMessages := llmMessages
+	applyOpenAIResponsesInstructions(route, routeConfig.Endpoint, &generateInput)
+	estimatedPromptTokens = estimateGenerateInputTokens(generateInput)
 	statefulContextConfig := buildPromptContextConfigSignature(cfg)
 	statefulContextState := buildPromptContextStateSignature(stableFullContextAttachments, prefixMemories)
 	statefulPrefixFingerprint := buildPromptStateFingerprint(promptStateFingerprintInput{
@@ -699,7 +781,7 @@ func (s *Service) sendMessageInternal(
 		if len(statefulMessages) > 0 && len(statefulMessages) < len(llmMessages) {
 			generateInput.Messages = statefulMessages
 			generateInput.PreviousResponseID = statefulDecision.PreviousResponseID
-			estimatedPromptTokens = estimatePromptTokens(statefulMessages)
+			estimatedPromptTokens = estimateGenerateInputTokens(generateInput)
 			sendSpan.SetAttributes(
 				attribute.Bool("conversation.stateful_response", true),
 				attribute.Int("conversation.stateful_full_messages", len(llmMessages)),
@@ -724,7 +806,6 @@ func (s *Service) sendMessageInternal(
 			FullMessages:       fullLLMMessages,
 			PreviousResponseID: generateInput.PreviousResponseID,
 		}))
-		traceRecorder.completeProcess()
 	}
 	sendSpan.SetAttributes(promptShapeTraceAttributes("conversation.prompt", initialPromptShape)...)
 
@@ -742,6 +823,7 @@ func (s *Service) sendMessageInternal(
 			}
 		}
 		if traceRecorder != nil {
+			traceRecorder.completeProcess()
 			traceRecorder.completeUpstreamThink()
 		}
 		if err := onDelta(delta); err != nil {
@@ -766,6 +848,12 @@ func (s *Service) sendMessageInternal(
 			return nil
 		}
 		callPromptShape := summarizePromptShape(callPromptMode, currentInput.Messages, currentInput.Messages, currentInput.PreviousResponseID)
+		usageAccumulator.beginCall(currentInput)
+		if currentInput.ResponsesBackground {
+			responsesBackgroundRecovery = openAIResponsesBackgroundRecoveryState{Enabled: true}
+		} else {
+			responsesBackgroundRecovery = openAIResponsesBackgroundRecoveryState{}
+		}
 		generationCtx, generationSpan := platformtracing.Start(ctx, "conversation.llm.generate",
 			trace.WithAttributes(append([]attribute.KeyValue{
 				attribute.Int64("conversation.id", int64(input.ConversationID)),
@@ -774,6 +862,7 @@ func (s *Service) sendMessageInternal(
 				attribute.String("llm.endpoint", routeConfig.Endpoint),
 				attribute.Bool("llm.stream", streamRequested && streamSupported),
 				attribute.Bool("llm.tools_disabled", currentInput.DisableTools),
+				attribute.Bool("llm.responses_background", currentInput.ResponsesBackground),
 				attribute.Int("llm.message_count", len(currentInput.Messages)),
 				attribute.Int("llm.tool_count", len(currentInput.Tools)),
 			}, promptShapeTraceAttributes("llm.prompt", callPromptShape)...)...),
@@ -818,6 +907,7 @@ func (s *Service) sendMessageInternal(
 		}
 
 		if !streamRequested || !streamSupported {
+			upstreamCallStarted = true
 			output, err := s.llmClient.Generate(generationCtx, routeConfig, currentInput)
 			generateErr = err
 			if err == nil && streamRequested {
@@ -826,21 +916,40 @@ func (s *Service) sendMessageInternal(
 					return output, generateErr
 				}
 			}
+			if generateErr == nil {
+				usageAccumulator.finishCall(output != nil && output.Usage.InputTokens > 0)
+			}
 			return output, err
 		}
 		thinkingRouter := &thinkingDeltaRouter{}
 		callStreamUsage := llm.Usage{}
+		upstreamCallStarted = true
 		output, streamErr := s.llmClient.GenerateStream(generationCtx, routeConfig, currentInput, func(event llm.GenerateStreamEvent) error {
+			if currentInput.ResponsesBackground {
+				if responseID := strings.TrimSpace(event.ResponseID); responseID != "" {
+					responsesBackgroundRecovery.ResponseID = responseID
+				}
+			}
 			if s.isMessageGenerationCanceled(generationCtx, runID) {
 				return ErrMessageGenerationCanceled
 			}
-			if event.Usage != (llm.Usage{}) && input.OnEvent != nil {
+			if event.Usage != (llm.Usage{}) {
 				// 上游流式 usage 通常是“本次 LLM 调用累计值”，但一条消息可能包含多轮 LLM 调用。
 				// 这里先换算成本次调用内增量，再累加成本轮消息总量，保证实时展示和最终账单口径一致。
 				usageDelta := diffLLMUsage(event.Usage, callStreamUsage)
 				callStreamUsage = event.Usage
-				streamUsageTotal = addLLMUsage(streamUsageTotal, usageDelta)
-				if err := emitLLMUsageEvent(input.OnEvent, streamUsageTotal); err != nil {
+				if currentInput.ResponsesBackground {
+					responsesBackgroundRecovery.ObservedUsage = callStreamUsage
+				}
+				currentUsage := usageAccumulator.addObservedUsage(usageDelta)
+				if input.OnEvent != nil {
+					if err := emitLLMUsageEvent(input.OnEvent, currentUsage); err != nil {
+						return err
+					}
+				}
+			}
+			if event.GeneratedImage != nil {
+				if err := emitMediaImageDelta(input.OnEvent, event); err != nil {
 					return err
 				}
 			}
@@ -913,36 +1022,15 @@ func (s *Service) sendMessageInternal(
 				generateErr = emitNonStreamingOutput(output)
 			}
 		}
+		if generateErr == nil {
+			usageAccumulator.finishCall((callStreamUsage.InputTokens > 0) || (output != nil && output.Usage.InputTokens > 0))
+		}
 		return output, generateErr
 	}
 
 	handleCanceledGeneration := func(generateErr error) bool {
-		if generateErr == nil || (ctx.Err() == nil && !errors.Is(generateErr, ErrMessageGenerationCanceled)) {
+		if generateErr == nil || (ctx.Err() == nil && !isMessageGenerationCanceledError(generateErr)) {
 			return false
-		}
-		partialText := strings.TrimSpace(streamedText.String())
-		if assistantMessage != nil && partialText != "" {
-			latencyMS := time.Since(startedAt).Milliseconds()
-			if latencyMS < 0 {
-				latencyMS = 0
-			}
-			_ = s.repo.UpdateAssistantMessageCompletion(
-				context.Background(),
-				assistantMessage.ID,
-				partialText,
-				estimateTokens(partialText),
-				0,
-				latencyMS,
-				"canceled",
-				classifyRunErrorCode(ErrMessageGenerationCanceled),
-				ErrMessageGenerationCanceled.Error(),
-			)
-			assistantMessage.Content = partialText
-			assistantMessage.OutputTokens = estimateTokens(partialText)
-			assistantMessage.TokenUsage = assistantMessage.OutputTokens + assistantMessage.ReasoningTokens
-			assistantMessage.Status = "canceled"
-			assistantMessage.ErrorCode = classifyRunErrorCode(ErrMessageGenerationCanceled)
-			assistantMessage.ErrorMessage = ErrMessageGenerationCanceled.Error()
 		}
 		retErr = ErrMessageGenerationCanceled
 		return true
@@ -952,6 +1040,25 @@ func (s *Service) sendMessageInternal(
 	upstreamOutput, err = runGenerate(generateInput)
 	if handleCanceledGeneration(err) {
 		return nil, retErr
+	}
+	if err != nil && generateInput.ResponsesBackground &&
+		strings.TrimSpace(streamedText.String()) == "" &&
+		shouldRetryWithoutResponsesBackground(err) {
+		if s.logger != nil {
+			s.logger.Warn("openai_responses_background_rejected_retry_standard",
+				zap.String("trace_id", traceid.FromContext(ctx)),
+				zap.Uint("conversation_id", input.ConversationID),
+				zap.String("protocol", route.Protocol),
+				zap.String("upstream_name", route.UpstreamName),
+				zap.Error(err),
+			)
+		}
+		generateInput.ResponsesBackground = false
+		responsesBackgroundRecovery = openAIResponsesBackgroundRecoveryState{}
+		upstreamOutput, err = runGenerate(generateInput)
+		if handleCanceledGeneration(err) {
+			return nil, retErr
+		}
 	}
 	if err != nil && strings.TrimSpace(generateInput.PreviousResponseID) != "" &&
 		strings.TrimSpace(streamedText.String()) == "" &&
@@ -968,7 +1075,8 @@ func (s *Service) sendMessageInternal(
 		_ = s.repo.UpdateConversationLastResponseID(ctx, input.ConversationID, "")
 		generateInput.PreviousResponseID = ""
 		generateInput.Messages = fullLLMMessages
-		estimatedPromptTokens = estimatePromptTokens(fullLLMMessages)
+		applyOpenAIResponsesInstructions(route, routeConfig.Endpoint, &generateInput)
+		estimatedPromptTokens = estimateGenerateInputTokens(generateInput)
 		initialPromptShape = summarizePromptShape("full_retry", generateInput.Messages, fullLLMMessages, "")
 		if traceRecorder != nil {
 			traceRecorder.recordPromptTrace(buildMessagePromptTrace(messagePromptTraceInput{
@@ -981,7 +1089,6 @@ func (s *Service) sendMessageInternal(
 				SentMessages: generateInput.Messages,
 				FullMessages: fullLLMMessages,
 			}))
-			traceRecorder.completeProcess()
 		}
 		sendSpan.SetAttributes(promptShapeTraceAttributes("conversation.prompt_retry", initialPromptShape)...)
 		streamedText.Reset()
@@ -1002,9 +1109,9 @@ func (s *Service) sendMessageInternal(
 	toolCallRows = append(toolCallRows, nativeToolRows...)
 	totalUsage := upstreamOutput.Usage
 	if totalUsage == (llm.Usage{}) {
-		totalUsage = streamUsageTotal
+		totalUsage = usageAccumulator.usage()
 	} else {
-		streamUsageTotal = totalUsage
+		usageAccumulator.setObservedUsage(totalUsage)
 	}
 	totalServerSideToolUsage = addServerSideToolUsage(nil, upstreamOutput.ServerSideToolUsage)
 	remainingToolCalls := s.resolveMaxToolCallsPerRun()
@@ -1027,6 +1134,7 @@ func (s *Service) sendMessageInternal(
 		toolResult := s.executeAssistantToolCalls(toolCtx, executeAssistantToolCallsInput{
 			UserID:         input.UserID,
 			ConversationID: input.ConversationID,
+			MessageID:      assistantMessage.ID,
 			RequestID:      input.RequestID,
 			RunID:          runID,
 			ToolCalls:      upstreamOutput.ToolCalls,
@@ -1046,6 +1154,7 @@ func (s *Service) sendMessageInternal(
 		}
 		toolSpan.End()
 		toolCallRows = append(toolCallRows, toolResult.Rows...)
+		mergeToolCallPersistenceKeys(&persistedToolCallKeys, toolResult.PersistedToolCallKeys)
 		remainingToolCalls -= len(toolResult.Rows)
 		if toolResult.FatalErr != nil {
 			retErr = wrapUpstreamRequestError(toolResult.FatalErr)
@@ -1055,7 +1164,7 @@ func (s *Service) sendMessageInternal(
 			break
 		}
 		reasoningContent := ""
-		if route.ReasoningContentPassback {
+		if reasoningContentPassback {
 			reasoningContent = outputReasoningContent(upstreamOutput)
 		}
 		llmMessages = append(llmMessages,
@@ -1077,12 +1186,14 @@ func (s *Service) sendMessageInternal(
 			followUpInput.Tools = nil
 			followUpInput.DisableTools = true
 			followUpInput.PreviousResponseID = ""
-		} else if routeConfig.Endpoint == llm.EndpointResponses && strings.TrimSpace(upstreamOutput.ResponseID) != "" {
+			applyOpenAIResponsesInstructions(route, routeConfig.Endpoint, &followUpInput)
+		} else if routeConfig.Endpoint == llm.EndpointResponses && supportsPreviousResponseIDRoute(route) && strings.TrimSpace(upstreamOutput.ResponseID) != "" {
 			followUpInput.PreviousResponseID = strings.TrimSpace(upstreamOutput.ResponseID)
 			followUpInput.Messages = []llm.Message{{Role: "tool", ToolResults: toolResult.ToolResults}}
 		} else {
 			followUpInput.Messages = llmMessages
 			followUpInput.PreviousResponseID = ""
+			applyOpenAIResponsesInstructions(route, routeConfig.Endpoint, &followUpInput)
 		}
 
 		nextOutput, nextErr := runGenerate(followUpInput)
@@ -1097,9 +1208,9 @@ func (s *Service) sendMessageInternal(
 		s.routeResolver.MarkRouteSuccess(ctx, route)
 		totalUsage = addLLMUsage(totalUsage, nextOutput.Usage)
 		if nextOutput.Usage != (llm.Usage{}) {
-			streamUsageTotal = totalUsage
-		} else if streamUsageTotal != (llm.Usage{}) {
-			totalUsage = streamUsageTotal
+			usageAccumulator.setObservedUsage(totalUsage)
+		} else if usageAccumulator.usage() != (llm.Usage{}) {
+			totalUsage = usageAccumulator.usage()
 		}
 		totalServerSideToolUsage = addServerSideToolUsage(totalServerSideToolUsage, nextOutput.ServerSideToolUsage)
 		upstreamOutput = nextOutput
@@ -1114,6 +1225,7 @@ func (s *Service) sendMessageInternal(
 		finalInput.Tools = nil
 		finalInput.DisableTools = true
 		finalInput.PreviousResponseID = ""
+		applyOpenAIResponsesInstructions(route, routeConfig.Endpoint, &finalInput)
 		nextOutput, nextErr := runGenerate(finalInput)
 		if handleCanceledGeneration(nextErr) {
 			return nil, retErr
@@ -1126,9 +1238,9 @@ func (s *Service) sendMessageInternal(
 		s.routeResolver.MarkRouteSuccess(ctx, route)
 		totalUsage = addLLMUsage(totalUsage, nextOutput.Usage)
 		if nextOutput.Usage != (llm.Usage{}) {
-			streamUsageTotal = totalUsage
-		} else if streamUsageTotal != (llm.Usage{}) {
-			totalUsage = streamUsageTotal
+			usageAccumulator.setObservedUsage(totalUsage)
+		} else if usageAccumulator.usage() != (llm.Usage{}) {
+			totalUsage = usageAccumulator.usage()
 		}
 		totalServerSideToolUsage = addServerSideToolUsage(totalServerSideToolUsage, nextOutput.ServerSideToolUsage)
 		upstreamOutput = nextOutput
@@ -1138,16 +1250,14 @@ func (s *Service) sendMessageInternal(
 		toolCallRows = append(toolCallRows, nextNativeToolRows...)
 	}
 
-	effectiveInputTokens := totalUsage.InputTokens
-	if effectiveInputTokens <= 0 {
-		effectiveInputTokens = estimatedPromptTokens
-	}
-	effectiveOutputTokens := totalUsage.OutputTokens
-	if effectiveOutputTokens <= 0 {
-		effectiveOutputTokens = estimateTokens(assistantText)
-	}
+	effectiveInputTokens := usageAccumulator.effectiveInputTokens(estimatedPromptTokens)
+	effectiveOutputTokens := resolveObservedOrEstimatedOutputTokens(totalUsage.OutputTokens, assistantText)
 
-	if strings.TrimSpace(assistantText) == "" {
+	if toolRunFinalAnswerMissing(upstreamOutput, len(toolCallRows) > 0, llmCallCount, maxLLMCalls, remainingToolCalls) {
+		retErr = ErrToolRunFinalAnswerMissing
+		return nil, retErr
+	}
+	if strings.TrimSpace(assistantText) == "" && len(upstreamOutput.GeneratedImages) == 0 {
 		retErr = ErrUpstreamEmptyResponse
 		return nil, retErr
 	}
@@ -1158,6 +1268,10 @@ func (s *Service) sendMessageInternal(
 		retErr = err
 		return nil, err
 	}
+	assistantReasoningContent := ""
+	if reasoningContentPassback {
+		assistantReasoningContent = outputReasoningContent(upstreamOutput)
+	}
 	statefulPromptFingerprint := buildPromptStateFingerprint(promptStateFingerprintInput{
 		Protocol:          route.Protocol,
 		Endpoint:          routeConfig.Endpoint,
@@ -1166,7 +1280,7 @@ func (s *Service) sendMessageInternal(
 		PlatformModelName: conversation.Model,
 		ContextConfig:     statefulContextConfig,
 		ContextState:      statefulContextState,
-		Messages:          buildNextStatefulPrefixMessages(fullLLMMessages, input.Content, assistantText),
+		Messages:          buildNextStatefulPrefixMessages(fullLLMMessages, input.Content, assistantText, assistantReasoningContent),
 		Tools:             toolRuntime.definitions,
 		Options:           filteredOptions,
 	})
@@ -1219,6 +1333,8 @@ func (s *Service) sendMessageInternal(
 		UserMessage:               userMessage,
 		AssistantMessage:          assistantMessage,
 		AssistantText:             assistantText,
+		AssistantReasoningContent: assistantReasoningContent,
+		GeneratedImages:           upstreamOutput.GeneratedImages,
 		InputTokens:               effectiveInputTokens,
 		CacheReadTokens:           totalUsage.CacheReadTokens,
 		CacheWriteTokens:          totalUsage.CacheWriteTokens,
@@ -1228,6 +1344,8 @@ func (s *Service) sendMessageInternal(
 		ResponseID:                upstreamOutput.ResponseID,
 		StatefulPromptFingerprint: statefulPromptFingerprint,
 		ToolCallRows:              toolCallRows,
+		PersistedToolCallKeys:     persistedToolCallKeys,
+		ReuseUserMessage:          reuseUserMessage,
 	})
 	platformtracing.RecordError(persistSpan, err)
 	persistSpan.End()
@@ -1236,79 +1354,44 @@ func (s *Service) sendMessageInternal(
 		return nil, err
 	}
 
-	messageCount := conversation.MessageCount + 2
-	// 尊重用户"自动压缩"偏好：用户关闭后跳过本次压缩
-	userCompactAuto := true
-	if val, valErr := s.getUserSettingCached(ctx, input.UserID, "chat.context_compact_auto"); valErr == nil && val == "false" {
-		userCompactAuto = false
-	}
+	compactMessages := append([]model.Message(nil), contextMessages...)
+	compactMessages[len(compactMessages)-1] = *userMessage
+	compactMessages = append(compactMessages, *assistantMessage)
 	compactCfg := s.cfg.Snapshot()
-	if !userCompactAuto {
+	compactPolicy = s.resolveContextCompactionPolicy(ctx, compactCfg, input.UserID)
+	compactInput := appcompact.MaybeCompactConversationInput{
+		ConversationID:      input.ConversationID,
+		UserID:              input.UserID,
+		RunID:               runID,
+		Messages:            compactMessages,
+		PromptTokenEstimate: estimatedPromptTokens,
+	}
+	var postBillingCompaction *postBillingCompactionTask
+	if !compactPolicy.EffectiveEnabled() {
 		// 用户已关闭自动压缩，仅完成 trace 记录
-		if traceRecorder != nil {
-			traceRecorder.complete()
-			traceRecorder.attachToMessage(assistantMessage)
-		}
-	} else if compactCfg.CompactAsyncEnabled {
-		// 异步压缩：移出响应关键路径，不阻塞流式返回
-		compactPlatformModelName := s.resolveTextTaskModel(ctx, compactCfg.CompactTaskModel, conversation.Model, input.UserID, input.ConversationID, strings.TrimSpace(input.RequestID))
-		go func() {
-			asyncCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			asyncCtx = withBasicServiceBillingContext(asyncCtx, input.UserID, input.ConversationID)
-			if compactErr := s.compactSvc.MaybeCompactConversation(asyncCtx, input.ConversationID, runID, messageCount, compactPlatformModelName); compactErr == nil {
-				// 压缩后清空 LastResponseID：Responses API 有状态会话链已失效，需重传
-				if compactSnapshot, _ := s.compactSvc.GetSnapshotByRunID(asyncCtx, runID); compactSnapshot != nil {
-					s.invalidateSnapshotCache(input.ConversationID) // 新 Snapshot 已生成，失效缓存
-					_ = s.repo.UpdateConversationLastResponseID(asyncCtx, input.ConversationID, "")
-					s.persistSnapshotContextArtifact(asyncCtx, snapshotContextArtifactInput{
-						ConversationID: input.ConversationID,
-						UserID:         input.UserID,
-						MessageID:      assistantMessage.ID,
-						RunID:          runID,
-						Snapshot:       compactSnapshot,
-					})
-				}
-			}
-		}()
 		if traceRecorder != nil {
 			traceRecorder.complete()
 			traceRecorder.attachToMessage(assistantMessage)
 		}
 	} else {
 		compactPlatformModelName := s.resolveTextTaskModel(ctx, compactCfg.CompactTaskModel, conversation.Model, input.UserID, input.ConversationID, strings.TrimSpace(input.RequestID))
-		compactCtx := withBasicServiceBillingContext(ctx, input.UserID, input.ConversationID)
-		_ = s.compactSvc.MaybeCompactConversation(compactCtx, input.ConversationID, runID, messageCount, compactPlatformModelName)
-		if snapshot, snapshotErr := s.compactSvc.GetSnapshotByRunID(compactCtx, runID); snapshotErr == nil && snapshot != nil {
-			// 压缩后清空 LastResponseID：Responses API 有状态会话链已失效，需重传
-			s.invalidateSnapshotCache(input.ConversationID) // 新 Snapshot 已生成，失效缓存
-			_ = s.repo.UpdateConversationLastResponseID(compactCtx, input.ConversationID, "")
-			s.persistSnapshotContextArtifact(compactCtx, snapshotContextArtifactInput{
-				ConversationID: input.ConversationID,
-				UserID:         input.UserID,
-				MessageID:      assistantMessage.ID,
-				RunID:          runID,
-				Snapshot:       snapshot,
-			})
-			if traceRecorder != nil {
-				summary, markdown, payload := buildCompactionProcessTrace(snapshot)
-				traceRecorder.appendProcessSection(summary, markdown, payload, messageTraceStatusStreaming)
-			}
-			// 通知前端压缩完成（同步路径仍在 SSE 流中，可发送事件）
-			previewLen := len([]rune(snapshot.SummaryText))
-			if previewLen > 80 {
-				previewLen = 80
-			}
-			emitEvent(input.OnEvent, "compact_done", map[string]interface{}{
-				"method":          snapshot.Strategy,
-				"freed_tokens":    snapshot.SourceTokens - snapshot.SummaryTokens,
-				"kept_turns":      compactCfg.ContextCompactPreserve,
-				"summary_preview": string([]rune(snapshot.SummaryText)[:previewLen]),
-			})
+		compactInput.PlatformModelName = compactPlatformModelName
+		postBillingCompaction = &postBillingCompactionTask{
+			Async:          compactCfg.CompactAsyncEnabled,
+			Input:          compactInput,
+			ConversationID: input.ConversationID,
+			UserID:         input.UserID,
+			MessageID:      assistantMessage.ID,
+			RunID:          runID,
+			PreserveTurns:  compactCfg.ContextCompactPreserve,
+			OnEvent:        input.OnEvent,
+			TraceRecorder:  traceRecorder,
 		}
-		if traceRecorder != nil {
+		if compactCfg.CompactAsyncEnabled && traceRecorder != nil {
 			traceRecorder.complete()
 			traceRecorder.attachToMessage(assistantMessage)
+			postBillingCompaction.TraceRecorder = nil
+			postBillingCompaction.OnEvent = nil
 		}
 	}
 
@@ -1324,21 +1407,25 @@ func (s *Service) sendMessageInternal(
 	}
 
 	return &SendMessageResult{
-		UserMessage:         *userMessage,
-		AssistantMessage:    *assistantMessage,
-		Billable:            true,
-		UpstreamID:          run.UpstreamID,
-		UpstreamName:        run.UpstreamName,
-		PlatformModelName:   route.PlatformModelName,
-		RoutedBindingCode:   route.BindingCode,
-		UpstreamModelName:   route.UpstreamModel,
-		UpstreamProtocol:    route.Protocol,
-		EffectiveOptions:    filteredOptions,
-		UsageSpeed:          totalUsage.Speed,
-		UsageServiceTier:    totalUsage.ServiceTier,
-		CacheWrite5mTokens:  totalUsage.CacheWrite5mTokens,
-		CacheWrite1hTokens:  totalUsage.CacheWrite1hTokens,
-		ServerSideToolUsage: totalServerSideToolUsage,
-		LatencyMS:           time.Since(startedAt).Milliseconds(),
+		UserMessage:           *userMessage,
+		AssistantMessage:      *assistantMessage,
+		MetadataRefreshHint:   conversationMetadataRefreshHint(*conversation, *userMessage),
+		Billable:              true,
+		UpstreamID:            run.UpstreamID,
+		UpstreamName:          run.UpstreamName,
+		PlatformModelName:     route.PlatformModelName,
+		RoutedBindingCode:     route.BindingCode,
+		UpstreamModelName:     route.UpstreamModel,
+		UpstreamProtocol:      route.Protocol,
+		EffectiveOptions:      filteredOptions,
+		UsageSpeed:            totalUsage.Speed,
+		UsageServiceTier:      totalUsage.ServiceTier,
+		RawUsageJSON:          totalUsage.RawUsageJSON,
+		CacheWrite5mTokens:    totalUsage.CacheWrite5mTokens,
+		CacheWrite1hTokens:    totalUsage.CacheWrite1hTokens,
+		ServerSideToolUsage:   totalServerSideToolUsage,
+		LatencyMS:             time.Since(startedAt).Milliseconds(),
+		StartedAt:             startedAt,
+		postBillingCompaction: postBillingCompaction,
 	}, nil
 }

@@ -261,6 +261,132 @@ func TestNormalizeDetectedMIMEDowngradesActiveContent(t *testing.T) {
 	}
 }
 
+func TestNormalizeDetectedMIMERecognizesVideoExtensions(t *testing.T) {
+	tests := []struct {
+		detected string
+		fileName string
+		want     string
+	}{
+		{detected: "application/octet-stream", fileName: "clip.mp4", want: "video/mp4"},
+		{detected: "application/octet-stream", fileName: "clip.webm", want: "video/webm"},
+	}
+	for _, tt := range tests {
+		if got := normalizeDetectedMIME(tt.detected, tt.fileName); got != tt.want {
+			t.Fatalf("normalizeDetectedMIME(%q, %q) = %q, want %q", tt.detected, tt.fileName, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeDetectedMIMERecognizesPresentations(t *testing.T) {
+	tests := []struct {
+		detected string
+		fileName string
+		wantMIME string
+	}{
+		{
+			detected: "application/octet-stream",
+			fileName: "slides.ppt",
+			wantMIME: "application/vnd.ms-powerpoint",
+		},
+		{
+			detected: "application/zip",
+			fileName: "slides.pptx",
+			wantMIME: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		},
+	}
+
+	for _, tt := range tests {
+		if got := normalizeDetectedMIME(tt.detected, tt.fileName); got != tt.wantMIME {
+			t.Fatalf("normalizeDetectedMIME(%q, %q) = %q, want %q", tt.detected, tt.fileName, got, tt.wantMIME)
+		}
+		if got := inferFileCategory(tt.wantMIME, tt.fileName); got != fileCategoryPresentation {
+			t.Fatalf("inferFileCategory(%q, %q) = %q, want %q", tt.wantMIME, tt.fileName, got, fileCategoryPresentation)
+		}
+	}
+}
+
+func TestUploadFileAllowsMP4WhenVideoMP4IsAllowed(t *testing.T) {
+	ctx := context.Background()
+	repo := newUploadTestRepo()
+	store := newUploadTestStore()
+	cfg := config.Config{
+		MaxUploadFileBytes:    1024 * 1024,
+		UserStorageQuotaBytes: 10 * 1024 * 1024,
+		FileAllowedMIMETypes:  "video/mp4",
+	}
+	service := NewServiceWithRuntime(config.NewRuntime(cfg), repo, nil, Hooks{}, ErrorSet{
+		InvalidFileReference: repository.ErrInvalidInput,
+		InvalidFileName:      repository.ErrInvalidInput,
+		StorageQuotaExceeded: repository.ErrConflict,
+		FileTooLarge:         repository.ErrInvalidInput,
+		MIMEBlocked:          repository.ErrInvalidInput,
+		DangerousMIMEType:    repository.ErrInvalidInput,
+	}, "test")
+	service.SetObjectStoreProvider(uploadTestStoreProvider{store: store})
+
+	content := []byte("not a real mp4 but uploaded with a .mp4 extension")
+	result, err := service.UploadFile(ctx, UploadFileInput{
+		UserID:       1,
+		Purpose:      "chat",
+		FileName:     "clip.mp4",
+		MimeType:     "video/mp4",
+		DeclaredSize: int64(len(content)),
+		Reader:       bytes.NewReader(content),
+	})
+	if err != nil {
+		t.Fatalf("mp4 upload should be allowed: %v", err)
+	}
+	if result.File.DetectedMIME != "video/mp4" {
+		t.Fatalf("DetectedMIME = %q, want video/mp4", result.File.DetectedMIME)
+	}
+	if result.File.FileCategory != fileCategoryVideo {
+		t.Fatalf("FileCategory = %q, want %q", result.File.FileCategory, fileCategoryVideo)
+	}
+	if result.File.ProcessingStatus != "uploaded" || !result.File.ProcessingReady {
+		t.Fatalf("video processing state = %q ready=%v, want uploaded ready=true", result.File.ProcessingStatus, result.File.ProcessingReady)
+	}
+}
+
+func TestValidateImageFile(t *testing.T) {
+	repo := newUploadTestRepo()
+	store := newUploadTestStore()
+	service := newUploadTestService(repo, store)
+	image := domainconversation.FileObject{
+		FileID:       "file_image",
+		UserID:       1,
+		FileName:     "avatar.png",
+		MimeType:     "image/png",
+		DetectedMIME: "image/png",
+		FileCategory: "image",
+		Status:       "active",
+	}
+	repo.files = append(repo.files, image)
+
+	if err := service.ValidateImageFile(context.Background(), 1, image.FileID); err != nil {
+		t.Fatalf("ValidateImageFile() failed: %v", err)
+	}
+}
+
+func TestValidateImageFileRejectsNonImage(t *testing.T) {
+	repo := newUploadTestRepo()
+	store := newUploadTestStore()
+	service := newUploadTestService(repo, store)
+	file := domainconversation.FileObject{
+		FileID:       "file_text",
+		UserID:       1,
+		FileName:     "notes.txt",
+		MimeType:     "text/plain",
+		DetectedMIME: "text/plain",
+		FileCategory: "text",
+		Status:       "active",
+	}
+	repo.files = append(repo.files, file)
+
+	if err := service.ValidateImageFile(context.Background(), 1, file.FileID); err == nil {
+		t.Fatal("ValidateImageFile() should reject non-image files")
+	}
+}
+
 func newUploadTestService(repo *uploadTestRepo, store *uploadTestStore) *Service {
 	cfg := config.Config{
 		MaxUploadFileBytes:    1024 * 1024,

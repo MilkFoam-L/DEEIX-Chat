@@ -1,13 +1,32 @@
 "use client";
 
 import * as React from "react";
-import { Copy, CornerDownRight } from "lucide-react";
+import { CornerDownRight, Trash2 } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { SpinnerLabel } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
@@ -21,27 +40,50 @@ import {
   TableEmptyRow,
   TableHead,
   TableHeader,
+  TableLoadingRow,
   TableRow,
-  TableSkeletonRows,
 } from "@/components/ui/table";
+import { useVirtualTableRows, VirtualTablePaddingRow } from "@/components/ui/virtual-table";
 import { AdminDateRangeFilter, ADMIN_DATE_PICKER_TRIGGER_CLASSNAME } from "@/features/admin/components/admin-date-range-filter";
+import { AdminDateTimePicker } from "@/features/admin/components/admin-date-time-picker";
 import { TablePagination, TableToolbar } from "@/components/ui/table-tools";
-import type { AdminAuditLogDTO, AdminSystemEventDTO, AdminUsageLogDTO, AdminUserAuthEventDTO } from "@/features/admin/api/admin.types";
+import { CopyActionButton } from "@/shared/components/copy-action";
+import { useDialogSnapshot } from "@/shared/hooks/use-dialog-snapshot";
+import type {
+  AdminAuditLogDTO,
+  AdminConversationEventDTO,
+  AdminPaymentOrderDTO,
+  AdminSystemEventDTO,
+  AdminUsageLogDTO,
+  AdminUserAuthEventDTO,
+} from "@/features/admin/api/admin.types";
+import {
+  cleanupAdminLogs,
+  type AdminLogCleanupType,
+} from "@/features/admin/api/audit";
 import {
   AUDIT_LOG_SORT_OPTIONS,
+  CONVERSATION_EVENT_SORT_OPTIONS,
+  PAYMENT_ORDER_SORT_OPTIONS,
   SECURITY_LOG_SORT_OPTIONS,
   SYSTEM_EVENT_SORT_OPTIONS,
   USAGE_LOG_SORT_OPTIONS,
+  useAdminConversationEvents,
   useAdminLogs,
+  useAdminPaymentOrders,
   useAdminSecurityLogs,
   useAdminSystemEvents,
   useAdminUsageLogs,
   type AuditLogSortValue,
+  type ConversationEventSortValue,
+  type PaymentOrderSortValue,
   type SecurityLogSortValue,
   type SystemEventSortValue,
   type UsageLogSortValue,
 } from "@/features/admin/hooks/use-admin-logs";
 import { cn } from "@/lib/utils";
+import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
+import { resolveAdminErrorMessage } from "@/features/admin/utils/admin-error";
 import { billingRateMultiplierNote, cacheWriteBillingLabel, cacheWriteBillingNote, type BillingDisplayLabels } from "@/shared/lib/billing-display";
 import { ModelSelect, type ModelSelectOption } from "@/shared/components/model-select";
 
@@ -49,7 +91,9 @@ type LogDetail =
   | { kind: "audit"; item: AdminAuditLogDTO }
   | { kind: "auth"; item: AdminUserAuthEventDTO }
   | { kind: "usage"; item: AdminUsageLogDTO }
-  | { kind: "system"; item: AdminSystemEventDTO };
+  | { kind: "system"; item: AdminSystemEventDTO }
+  | { kind: "order"; item: AdminPaymentOrderDTO }
+  | { kind: "conversation"; item: AdminConversationEventDTO };
 
 const ALL_MODELS_VALUE = "__all__";
 
@@ -87,6 +131,21 @@ function formatJSON(raw: string | null | undefined): string {
   }
 }
 
+function parseJSONRecord(raw: string | null | undefined): Record<string, unknown> | null {
+  const value = raw?.trim();
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function formatCount(value: number | null | undefined, locale: string): string {
   return new Intl.NumberFormat(locale).format(value ?? 0);
 }
@@ -119,7 +178,16 @@ type UsagePricingSnapshot = {
   duration_billed_nanousd?: number;
   tiered_from_tokens?: number;
   tiered_up_to_tokens?: number | null;
+  upstream_usage?: unknown;
 };
+
+function usageLogRawUsageJSON(item: AdminUsageLogDTO): string {
+  const upstreamUsage = parseJSONRecord(item.pricingSnapshotJSON)?.upstream_usage;
+  if (upstreamUsage && typeof upstreamUsage === "object") {
+    return JSON.stringify(upstreamUsage, null, 2);
+  }
+  return "{}";
+}
 
 type UsageBillingLabels = {
   input: string;
@@ -200,6 +268,24 @@ function formatTooltipUsageCost(value: number): string {
     minimumFractionDigits: 6,
     maximumFractionDigits: 6,
   })}`;
+}
+
+function formatMoneyCents(value: number | null | undefined, currency: string): string {
+  const amount = (value ?? 0) / 100;
+  const normalizedCurrency = currency.trim().toUpperCase();
+  if (!normalizedCurrency) {
+    return amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: normalizedCurrency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${normalizedCurrency}`;
+  }
 }
 
 function formatTooltipUnitPrice(value: number): string {
@@ -559,18 +645,6 @@ function UsageLogModelFilter({
   );
 }
 
-async function copyText(value: string, label: string, copiedMessage: (label: string) => string, failedMessage: string) {
-  if (!value.trim()) {
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(value);
-    toast.success(copiedMessage(label));
-  } catch {
-    toast.error(failedMessage);
-  }
-}
-
 function DetailRow({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
     <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3 border-b border-border/50 py-2.5 last:border-b-0">
@@ -589,10 +663,15 @@ function DetailBlock({ title, children }: { title: string; children: React.React
   );
 }
 
-function LogDetailSheet({ detail, onClose }: { detail: LogDetail | null; onClose: () => void }) {
+function LogDetailSheet({ detail: rawDetail, onClose }: { detail: LogDetail | null; onClose: () => void }) {
   const locale = useLocale();
   const t = useTranslations("adminLogs.detail");
   const usageLabels = useUsageBillingLabels();
+  const detail = useDialogSnapshot(rawDetail);
+  const copyMessages = React.useMemo(() => ({
+    copied: t("copied", { label: "" }).trim(),
+    failed: t("copyFailed"),
+  }), [t]);
   const resultLabel = React.useCallback(
     (value: string) => {
       switch (value) {
@@ -613,6 +692,10 @@ function LogDetailSheet({ detail, onClose }: { detail: LogDetail | null; onClose
       ? t("titles.auth")
       : detail?.kind === "usage"
         ? t("titles.usage")
+        : detail?.kind === "order"
+          ? t("titles.order")
+          : detail?.kind === "conversation"
+            ? t("titles.conversation")
         : detail?.kind === "system"
           ? t("titles.system")
           : t("titles.audit");
@@ -621,16 +704,28 @@ function LogDetailSheet({ detail, onClose }: { detail: LogDetail | null; onClose
       ? `${detail.item.eventType || t("fallbacks.authEvent")} · ${formatDateTime(detail.item.occurredAt, locale)}`
       : detail?.kind === "usage"
         ? `${detail.item.platformModelName || t("fallbacks.modelCall")} · ${formatDateTime(detail.item.createdAt, locale)}`
+        : detail?.kind === "order"
+          ? `${detail.item.orderNo || t("fallbacks.order")} · ${formatDateTime(detail.item.createdAt, locale)}`
+          : detail?.kind === "conversation"
+            ? `${detail.item.eventType || detail.item.eventScope || t("fallbacks.conversationEvent")} · ${formatDateTime(detail.item.createdAt, locale)}`
       : detail?.kind === "system"
         ? `${detail.item.event || t("fallbacks.systemEvent")} · ${formatDateTime(detail.item.createdAt, locale)}`
         : `${detail?.item.action || t("fallbacks.auditEvent")} · ${formatDateTime(detail?.item.createdAt, locale)}`;
-  const requestID = detail && detail.kind !== "usage" ? detail.item.requestID : "";
-  const detailJSON = detail?.kind === "usage" ? detail.item.pricingSnapshotJSON : detail?.item.detailJSON;
+  const requestID = detail && detail.kind !== "usage" && detail.kind !== "order" && detail.kind !== "conversation" ? detail.item.requestID : "";
+  const detailJSON =
+    detail?.kind === "usage"
+      ? detail.item.pricingSnapshotJSON
+      : detail?.kind === "order"
+        ? detail.item.snapshotJSON
+        : detail?.kind === "conversation"
+          ? detail.item.payloadJSON || detail.item.inputJSON || detail.item.outputJSON || detail.item.errorJSON
+          : detail?.item.detailJSON;
+  const rawUsageJSON = detail?.kind === "usage" ? usageLogRawUsageJSON(detail.item) : "";
   const formattedJSON = formatJSON(detailJSON);
 
   return (
-    <Sheet open={Boolean(detail)} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="sm:max-w-[720px]">
+    <Sheet open={Boolean(rawDetail)} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent className="sm:max-w-[480px]">
         <SheetHeader>
           <SheetTitle>{title}</SheetTitle>
           <SheetDescription>{description}</SheetDescription>
@@ -730,20 +825,116 @@ function LogDetailSheet({ detail, onClose }: { detail: LogDetail | null; onClose
             </>
           ) : null}
 
+          {detail?.kind === "usage" ? (
+            <section className="space-y-2">
+              <div className="flex items-center justify-between gap-3 px-1">
+                <h4 className="text-xs font-medium text-foreground/88">{t("rawUsageJsonTitle")}</h4>
+                <CopyActionButton
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs shadow-none"
+                  value={rawUsageJSON}
+                  messages={copyMessages}
+                  copyOptions={{ copied: t("copied", { label: t("rawUsageJsonTitle") }) }}
+                >
+                  JSON
+                </CopyActionButton>
+              </div>
+              <pre className="max-h-[240px] overflow-auto rounded-lg border border-border/60 bg-muted/35 p-3 text-xs leading-5 text-foreground/86">
+                <code>{rawUsageJSON}</code>
+              </pre>
+            </section>
+          ) : null}
+
+          {detail?.kind === "order" ? (
+            <>
+              <DetailBlock title={t("blocks.order")}>
+                <DetailRow label="ID" value={detail.item.id} mono />
+                <DetailRow label={t("fields.orderNo")} value={detail.item.orderNo} mono />
+                <DetailRow label={t("fields.orderType")} value={detail.item.orderType} />
+                <DetailRow label={t("fields.provider")} value={detail.item.provider} />
+                <DetailRow label={t("fields.status")} value={detail.item.status} />
+                <DetailRow label={t("fields.createdAt")} value={formatDateTime(detail.item.createdAt, locale)} />
+                <DetailRow label={t("fields.paidAt")} value={formatDateTime(detail.item.paidAt, locale)} />
+              </DetailBlock>
+              <DetailBlock title={t("blocks.user")}>
+                <DetailRow label={t("fields.user")} value={resolveUserDisplayName(detail.item.userLabel, detail.item.username, detail.item.userID)} />
+                <DetailRow label={t("fields.userID")} value={detail.item.userID} mono />
+              </DetailBlock>
+              <DetailBlock title={t("blocks.payment")}>
+                <DetailRow label={t("fields.amount")} value={`${formatMoneyCents(detail.item.payAmountCents, detail.item.payCurrency)} / ${formatMoneyCents(detail.item.baseAmountCents, detail.item.baseCurrency)}`} mono />
+                <DetailRow label={t("fields.credit")} value={formatTooltipUsageCost(detail.item.creditUSD)} mono />
+                <DetailRow label={t("fields.interval")} value={`${detail.item.billingInterval || "-"} x ${detail.item.cycles || 0}`} />
+                <DetailRow label={t("fields.externalPaymentID")} value={detail.item.externalPaymentID || "-"} mono />
+                <DetailRow label={t("fields.externalCheckoutID")} value={detail.item.externalCheckoutID || "-"} mono />
+              </DetailBlock>
+            </>
+          ) : null}
+
+          {detail?.kind === "conversation" ? (
+            <>
+              <DetailBlock title={t("blocks.conversationEvent")}>
+                <DetailRow label="ID" value={detail.item.id} mono />
+                <DetailRow label={t("fields.runID")} value={detail.item.runID} mono />
+                <DetailRow label={t("fields.eventScope")} value={detail.item.eventScope} />
+                <DetailRow label={t("fields.event")} value={detail.item.eventType} />
+                <DetailRow label={t("fields.status")} value={detail.item.status} />
+                <DetailRow label={t("fields.stage")} value={detail.item.stage || detail.item.phase || "-"} />
+                <DetailRow label={t("fields.seq")} value={detail.item.seq} mono />
+                <DetailRow label={t("fields.createdAt")} value={formatDateTime(detail.item.createdAt, locale)} />
+              </DetailBlock>
+              <DetailBlock title={t("blocks.user")}>
+                <DetailRow label={t("fields.user")} value={resolveUserDisplayName(detail.item.userLabel, detail.item.username, detail.item.userID)} />
+                <DetailRow label={t("fields.userID")} value={detail.item.userID} mono />
+                <DetailRow label={t("fields.conversationID")} value={detail.item.conversationID} mono />
+                <DetailRow label={t("fields.messageID")} value={detail.item.messageID} mono />
+              </DetailBlock>
+              <DetailBlock title={t("blocks.modelRoute")}>
+                <DetailRow label={t("fields.platformModel")} value={detail.item.platformModelName || "-"} mono />
+                <DetailRow label={t("fields.upstreamName")} value={detail.item.upstreamName || "-"} />
+                <DetailRow label={t("fields.upstreamModel")} value={detail.item.upstreamModelName || "-"} mono />
+                <DetailRow label={t("fields.bindingCode")} value={detail.item.routedBindingCode || "-"} mono />
+                <DetailRow label={t("fields.protocol")} value={detail.item.providerProtocol || "-"} />
+              </DetailBlock>
+              <DetailBlock title={t("blocks.tool")}>
+                <DetailRow label={t("fields.toolName")} value={detail.item.toolName || "-"} />
+                <DetailRow label={t("fields.toolCallID")} value={detail.item.toolCallID || "-"} mono />
+                <DetailRow label={t("fields.latency")} value={`${formatCount(detail.item.latencyMS, locale)} ms`} mono />
+                <DetailRow label={t("fields.title")} value={detail.item.title || "-"} />
+                <DetailRow label={t("fields.summary")} value={detail.item.summary || "-"} />
+              </DetailBlock>
+            </>
+          ) : null}
+
           <section className="space-y-2">
             <div className="flex items-center justify-between gap-3 px-1">
               <h4 className="text-xs font-medium text-foreground/88">{t("jsonTitle")}</h4>
               <div className="flex items-center gap-1">
                 {requestID ? (
-                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs shadow-none" onClick={() => void copyText(requestID, t("fields.requestID"), (label) => t("copied", { label }), t("copyFailed"))}>
-                    <Copy className="size-3.5" />
+                  <CopyActionButton
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs shadow-none"
+                    value={requestID}
+                    messages={copyMessages}
+                    copyOptions={{ copied: t("copied", { label: t("fields.requestID") }) }}
+                  >
                     {t("fields.requestID")}
-                  </Button>
+                  </CopyActionButton>
                 ) : null}
-                <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs shadow-none" onClick={() => void copyText(formattedJSON, t("jsonTitle"), (label) => t("copied", { label }), t("copyFailed"))}>
-                  <Copy className="size-3.5" />
+                <CopyActionButton
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs shadow-none"
+                  value={formattedJSON}
+                  messages={copyMessages}
+                  copyOptions={{ copied: t("copied", { label: t("jsonTitle") }) }}
+                >
                   JSON
-                </Button>
+                </CopyActionButton>
               </div>
             </div>
             <pre className="max-h-[320px] overflow-auto rounded-lg border border-border/60 bg-muted/35 p-3 text-xs leading-5 text-foreground/86">
@@ -760,6 +951,10 @@ function AuditLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminAuditLogDTO
   const locale = useLocale();
   const t = useTranslations("adminLogs");
   const logs = useAdminLogs();
+  const virtualRows = useVirtualTableRows(logs.auditLogs, {
+    enabled: logs.auditLogs.length > 100,
+    estimateSize: 40,
+  });
 
   return (
     <div className="space-y-3">
@@ -806,7 +1001,11 @@ function AuditLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminAuditLogDTO
         onRefresh={() => void logs.loadAuditLogs(logs.page, logs.pageSize)}
       />
 
-      <Table>
+      <Table
+        viewportRef={virtualRows.viewportRef}
+        viewportClassName={virtualRows.viewportClassName}
+        viewportStyle={virtualRows.viewportStyle}
+      >
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="w-[72px]">ID</TableHead>
@@ -819,8 +1018,9 @@ function AuditLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminAuditLogDTO
           </TableRow>
         </TableHeader>
         <TableBody>
-          {logs.loading && logs.auditLogs.length === 0 ? <TableSkeletonRows colSpan={7} rowCount={10} /> : null}
-          {logs.auditLogs.map((item) => (
+          {logs.loading && logs.auditLogs.length === 0 ? <TableLoadingRow colSpan={7} /> : null}
+          {logs.auditLogs.length > 0 ? <VirtualTablePaddingRow colSpan={7} height={virtualRows.paddingTop} /> : null}
+          {logs.auditLogs.length > 0 ? virtualRows.rows.map(({ item }) => (
             <TableRow key={item.id} className="cursor-pointer" onClick={() => onOpenDetail(item)}>
               <TableCell className="font-mono text-xs text-foreground">{item.id}</TableCell>
               <TableCell className="whitespace-nowrap text-muted-foreground">
@@ -838,7 +1038,8 @@ function AuditLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminAuditLogDTO
                 <div className="max-w-[14rem] truncate" title={item.requestID || "-"}>{item.requestID || "-"}</div>
               </TableCell>
             </TableRow>
-          ))}
+          )) : null}
+          {logs.auditLogs.length > 0 ? <VirtualTablePaddingRow colSpan={7} height={virtualRows.paddingBottom} /> : null}
           {!logs.loading && logs.auditLogs.length === 0 ? <TableEmptyRow colSpan={7}>{t("audit.empty")}</TableEmptyRow> : null}
         </TableBody>
       </Table>
@@ -860,6 +1061,10 @@ function AuthLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminUserAuthEven
   const locale = useLocale();
   const t = useTranslations("adminLogs");
   const logs = useAdminSecurityLogs();
+  const virtualRows = useVirtualTableRows(logs.sortedEvents, {
+    enabled: logs.sortedEvents.length > 100,
+    estimateSize: 40,
+  });
   const resultLabel = React.useCallback(
     (value: string) => {
       switch (value) {
@@ -905,7 +1110,11 @@ function AuthLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminUserAuthEven
         onRefresh={() => void logs.loadSecurityLogs(logs.page, logs.pageSize)}
       />
 
-      <Table>
+      <Table
+        viewportRef={virtualRows.viewportRef}
+        viewportClassName={virtualRows.viewportClassName}
+        viewportStyle={virtualRows.viewportStyle}
+      >
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="w-[72px]">ID</TableHead>
@@ -919,8 +1128,9 @@ function AuthLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminUserAuthEven
           </TableRow>
         </TableHeader>
         <TableBody>
-          {logs.loading && logs.sortedEvents.length === 0 ? <TableSkeletonRows colSpan={8} rowCount={10} /> : null}
-          {logs.sortedEvents.map((item) => (
+          {logs.loading && logs.sortedEvents.length === 0 ? <TableLoadingRow colSpan={8} /> : null}
+          {logs.sortedEvents.length > 0 ? <VirtualTablePaddingRow colSpan={8} height={virtualRows.paddingTop} /> : null}
+          {logs.sortedEvents.length > 0 ? virtualRows.rows.map(({ item }) => (
             <TableRow key={item.id} className="cursor-pointer" onClick={() => onOpenDetail(item)}>
               <TableCell className="font-mono text-xs text-foreground">{item.id}</TableCell>
               <TableCell className="whitespace-nowrap text-muted-foreground">
@@ -939,7 +1149,8 @@ function AuthLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminUserAuthEven
                 <div className="max-w-[14rem] truncate" title={item.requestID || "-"}>{item.requestID || "-"}</div>
               </TableCell>
             </TableRow>
-          ))}
+          )) : null}
+          {logs.sortedEvents.length > 0 ? <VirtualTablePaddingRow colSpan={8} height={virtualRows.paddingBottom} /> : null}
           {!logs.loading && logs.sortedEvents.length === 0 ? <TableEmptyRow colSpan={8}>{t("auth.empty")}</TableEmptyRow> : null}
         </TableBody>
       </Table>
@@ -961,6 +1172,10 @@ function SystemEventTable({ onOpenDetail }: { onOpenDetail: (item: AdminSystemEv
   const locale = useLocale();
   const t = useTranslations("adminLogs");
   const logs = useAdminSystemEvents();
+  const virtualRows = useVirtualTableRows(logs.events, {
+    enabled: logs.events.length > 100,
+    estimateSize: 40,
+  });
 
   return (
     <div className="space-y-3">
@@ -1019,7 +1234,11 @@ function SystemEventTable({ onOpenDetail }: { onOpenDetail: (item: AdminSystemEv
         onRefresh={() => void logs.loadSystemEvents(logs.page, logs.pageSize)}
       />
 
-      <Table>
+      <Table
+        viewportRef={virtualRows.viewportRef}
+        viewportClassName={virtualRows.viewportClassName}
+        viewportStyle={virtualRows.viewportStyle}
+      >
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="w-[72px]">ID</TableHead>
@@ -1033,8 +1252,9 @@ function SystemEventTable({ onOpenDetail }: { onOpenDetail: (item: AdminSystemEv
           </TableRow>
         </TableHeader>
         <TableBody>
-          {logs.loading && logs.events.length === 0 ? <TableSkeletonRows colSpan={8} rowCount={10} /> : null}
-          {logs.events.map((item) => (
+          {logs.loading && logs.events.length === 0 ? <TableLoadingRow colSpan={8} /> : null}
+          {logs.events.length > 0 ? <VirtualTablePaddingRow colSpan={8} height={virtualRows.paddingTop} /> : null}
+          {logs.events.length > 0 ? virtualRows.rows.map(({ item }) => (
             <TableRow key={item.id} className="cursor-pointer" onClick={() => onOpenDetail(item)}>
               <TableCell className="font-mono text-xs text-foreground">{item.id}</TableCell>
               <TableCell className="whitespace-nowrap text-muted-foreground">{item.level || "-"}</TableCell>
@@ -1057,7 +1277,8 @@ function SystemEventTable({ onOpenDetail }: { onOpenDetail: (item: AdminSystemEv
                 <div className="max-w-[14rem] truncate" title={item.requestID || "-"}>{item.requestID || "-"}</div>
               </TableCell>
             </TableRow>
-          ))}
+          )) : null}
+          {logs.events.length > 0 ? <VirtualTablePaddingRow colSpan={8} height={virtualRows.paddingBottom} /> : null}
           {!logs.loading && logs.events.length === 0 ? <TableEmptyRow colSpan={8}>{t("system.empty")}</TableEmptyRow> : null}
         </TableBody>
       </Table>
@@ -1080,6 +1301,10 @@ function UsageLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminUsageLogDTO
   const t = useTranslations("adminLogs");
   const usageLabels = useUsageBillingLabels();
   const logs = useAdminUsageLogs();
+  const virtualRows = useVirtualTableRows(logs.logs, {
+    enabled: logs.logs.length > 100,
+    estimateSize: 40,
+  });
 
   return (
     <div className="space-y-3">
@@ -1139,7 +1364,11 @@ function UsageLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminUsageLogDTO
         onRefresh={() => void logs.loadUsageLogs(logs.page, logs.pageSize)}
       />
 
-      <Table>
+      <Table
+        viewportRef={virtualRows.viewportRef}
+        viewportClassName={virtualRows.viewportClassName}
+        viewportStyle={virtualRows.viewportStyle}
+      >
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="w-[72px]">ID</TableHead>
@@ -1152,8 +1381,9 @@ function UsageLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminUsageLogDTO
           </TableRow>
         </TableHeader>
         <TableBody>
-          {logs.loading && logs.logs.length === 0 ? <TableSkeletonRows colSpan={7} rowCount={10} /> : null}
-          {logs.logs.map((item) => (
+          {logs.loading && logs.logs.length === 0 ? <TableLoadingRow colSpan={7} /> : null}
+          {logs.logs.length > 0 ? <VirtualTablePaddingRow colSpan={7} height={virtualRows.paddingTop} /> : null}
+          {logs.logs.length > 0 ? virtualRows.rows.map(({ item }) => (
             <TableRow key={item.id} className="cursor-pointer" onClick={() => onOpenDetail(item)}>
               <TableCell className="font-mono text-xs text-foreground">{item.id}</TableCell>
               <TableCell>
@@ -1171,7 +1401,8 @@ function UsageLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminUsageLogDTO
               <TableCell className="whitespace-nowrap font-mono text-muted-foreground">{formatCount(item.latencyMS, locale)} ms</TableCell>
               <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(item.createdAt, locale)}</TableCell>
             </TableRow>
-          ))}
+          )) : null}
+          {logs.logs.length > 0 ? <VirtualTablePaddingRow colSpan={7} height={virtualRows.paddingBottom} /> : null}
           {!logs.loading && logs.logs.length === 0 ? <TableEmptyRow colSpan={7}>{t("usage.empty")}</TableEmptyRow> : null}
         </TableBody>
       </Table>
@@ -1189,9 +1420,497 @@ function UsageLogTable({ onOpenDetail }: { onOpenDetail: (item: AdminUsageLogDTO
   );
 }
 
+function PaymentOrderTable({ onOpenDetail }: { onOpenDetail: (item: AdminPaymentOrderDTO) => void }) {
+  const locale = useLocale();
+  const t = useTranslations("adminLogs");
+  const logs = useAdminPaymentOrders();
+  const virtualRows = useVirtualTableRows(logs.orders, {
+    enabled: logs.orders.length > 100,
+    estimateSize: 40,
+  });
+  const orderTypeLabel = React.useCallback((value: string) => {
+    switch (value) {
+      case "subscription":
+        return t("orders.types.subscription");
+      case "topup":
+        return t("orders.types.topup");
+      default:
+        return value || "-";
+    }
+  }, [t]);
+  const orderStatusLabel = React.useCallback((value: string) => {
+    switch (value) {
+      case "pending":
+        return t("orders.status.pending");
+      case "paid":
+        return t("orders.status.paid");
+      case "expired":
+        return t("orders.status.expired");
+      case "failed":
+        return t("orders.status.failed");
+      default:
+        return value || "-";
+    }
+  }, [t]);
+
+  return (
+    <div className="space-y-3">
+      <TableToolbar
+        query={logs.query}
+        onQueryChange={logs.setQuery}
+        queryPlaceholder={t("orders.searchPlaceholder")}
+        filters={[
+          {
+            key: "order_type",
+            label: t("orders.filters.orderType"),
+            value: logs.orderTypeFilter,
+            onValueChange: logs.setOrderTypeFilter,
+            options: [
+              { label: t("orders.filters.all"), value: "" },
+              { label: t("orders.types.subscription"), value: "subscription" },
+              { label: t("orders.types.topup"), value: "topup" },
+            ],
+          },
+          {
+            key: "provider",
+            label: t("orders.filters.provider"),
+            value: logs.providerFilter,
+            onValueChange: logs.setProviderFilter,
+            options: [
+              { label: t("orders.filters.all"), value: "" },
+              { label: "Stripe", value: "stripe" },
+              { label: "EPay", value: "epay" },
+            ],
+          },
+          {
+            key: "status",
+            label: t("orders.filters.status"),
+            value: logs.statusFilter,
+            onValueChange: logs.setStatusFilter,
+            options: [
+              { label: t("orders.filters.all"), value: "" },
+              { label: t("orders.status.pending"), value: "pending" },
+              { label: t("orders.status.paid"), value: "paid" },
+              { label: t("orders.status.expired"), value: "expired" },
+              { label: t("orders.status.failed"), value: "failed" },
+            ],
+          },
+          {
+            key: "created_range",
+            label: t("filters.timeRange"),
+            active: Boolean(logs.createdFromFilter || logs.createdToFilter),
+            content: (
+              <AdminDateRangeFilter
+                fromValue={logs.createdFromFilter}
+                toValue={logs.createdToFilter}
+                onFromChange={logs.setCreatedFromFilter}
+                onToChange={logs.setCreatedToFilter}
+                disabled={logs.loading}
+              />
+            ),
+          },
+        ]}
+        sort={{
+          value: logs.sortValue,
+          onValueChange: (value) => logs.setSortValue(value as PaymentOrderSortValue),
+          options: PAYMENT_ORDER_SORT_OPTIONS.map((item) => ({ label: t(item.labelKey), value: item.value })),
+        }}
+        loading={logs.loading}
+        onRefresh={() => void logs.loadPaymentOrders(logs.page, logs.pageSize)}
+      />
+
+      <Table
+        viewportRef={virtualRows.viewportRef}
+        viewportClassName={virtualRows.viewportClassName}
+        viewportStyle={virtualRows.viewportStyle}
+      >
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="w-[72px]">ID</TableHead>
+            <TableHead>{t("columns.user")}</TableHead>
+            <TableHead>{t("columns.orderNo")}</TableHead>
+            <TableHead>{t("columns.type")}</TableHead>
+            <TableHead>{t("columns.provider")}</TableHead>
+            <TableHead>{t("columns.status")}</TableHead>
+            <TableHead>{t("columns.amount")}</TableHead>
+            <TableHead>{t("columns.time")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {logs.loading && logs.orders.length === 0 ? <TableLoadingRow colSpan={8} /> : null}
+          {logs.orders.length > 0 ? <VirtualTablePaddingRow colSpan={8} height={virtualRows.paddingTop} /> : null}
+          {logs.orders.length > 0 ? virtualRows.rows.map(({ item }) => (
+            <TableRow key={item.id} className="cursor-pointer" onClick={() => onOpenDetail(item)}>
+              <TableCell className="font-mono text-xs text-foreground">{item.id}</TableCell>
+              <TableCell className="whitespace-nowrap text-muted-foreground">
+                {resolveUserDisplayName(item.userLabel, item.username, item.userID)}
+              </TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                <div className="max-w-[13rem] truncate" title={item.orderNo || "-"}>{item.orderNo || "-"}</div>
+              </TableCell>
+              <TableCell className="whitespace-nowrap">{orderTypeLabel(item.orderType)}</TableCell>
+              <TableCell className="whitespace-nowrap text-muted-foreground">{item.provider || "-"}</TableCell>
+              <TableCell className="whitespace-nowrap">{orderStatusLabel(item.status)}</TableCell>
+              <TableCell className="whitespace-nowrap font-mono text-muted-foreground">{formatMoneyCents(item.payAmountCents, item.payCurrency)}</TableCell>
+              <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(item.createdAt, locale)}</TableCell>
+            </TableRow>
+          )) : null}
+          {logs.orders.length > 0 ? <VirtualTablePaddingRow colSpan={8} height={virtualRows.paddingBottom} /> : null}
+          {!logs.loading && logs.orders.length === 0 ? <TableEmptyRow colSpan={8}>{t("orders.empty")}</TableEmptyRow> : null}
+        </TableBody>
+      </Table>
+
+      <TablePagination
+        loading={logs.loading}
+        page={logs.page}
+        pageCount={logs.pageCount}
+        pageSize={logs.pageSize}
+        total={logs.total}
+        onPageChange={(nextPage) => void logs.loadPaymentOrders(nextPage, logs.pageSize)}
+        onPageSizeChange={(nextPageSize) => void logs.loadPaymentOrders(1, nextPageSize)}
+      />
+    </div>
+  );
+}
+
+function ConversationEventTable({ onOpenDetail }: { onOpenDetail: (item: AdminConversationEventDTO) => void }) {
+  const locale = useLocale();
+  const t = useTranslations("adminLogs");
+  const logs = useAdminConversationEvents();
+  const virtualRows = useVirtualTableRows(logs.events, {
+    enabled: logs.events.length > 100,
+    estimateSize: 40,
+  });
+  const scopeLabel = React.useCallback((value: string) => {
+    switch (value) {
+      case "trace_block":
+        return t("conversation.scopes.trace_block");
+      case "trace_event":
+        return t("conversation.scopes.trace_event");
+      case "tool_call":
+        return t("conversation.scopes.tool_call");
+      default:
+        return value || "-";
+    }
+  }, [t]);
+  const eventStatusLabel = React.useCallback((value: string) => {
+    switch (value) {
+      case "streaming":
+        return t("conversation.status.streaming");
+      case "completed":
+        return t("conversation.status.completed");
+      case "error":
+        return t("conversation.status.error");
+      default:
+        return value || "-";
+    }
+  }, [t]);
+
+  return (
+    <div className="space-y-3">
+      <TableToolbar
+        query={logs.query}
+        onQueryChange={logs.setQuery}
+        queryPlaceholder={t("conversation.searchPlaceholder")}
+        filters={[
+          {
+            key: "event_scope",
+            label: t("conversation.filters.scope"),
+            value: logs.eventScopeFilter,
+            onValueChange: logs.setEventScopeFilter,
+            options: [
+              { label: t("conversation.filters.all"), value: "" },
+              { label: t("conversation.scopes.trace_block"), value: "trace_block" },
+              { label: t("conversation.scopes.trace_event"), value: "trace_event" },
+              { label: t("conversation.scopes.tool_call"), value: "tool_call" },
+            ],
+          },
+          {
+            key: "event_type",
+            label: t("conversation.filters.eventType"),
+            value: logs.eventTypeFilter,
+            onValueChange: logs.setEventTypeFilter,
+            options: [{ label: t("conversation.filters.all"), value: "" }, ...logs.eventTypeOptions],
+          },
+          {
+            key: "status",
+            label: t("conversation.filters.status"),
+            value: logs.statusFilter,
+            onValueChange: logs.setStatusFilter,
+            options: [
+              { label: t("conversation.filters.all"), value: "" },
+              { label: t("conversation.status.streaming"), value: "streaming" },
+              { label: t("conversation.status.completed"), value: "completed" },
+              { label: t("conversation.status.error"), value: "error" },
+            ],
+          },
+          {
+            key: "created_range",
+            label: t("filters.timeRange"),
+            active: Boolean(logs.createdFromFilter || logs.createdToFilter),
+            content: (
+              <AdminDateRangeFilter
+                fromValue={logs.createdFromFilter}
+                toValue={logs.createdToFilter}
+                onFromChange={logs.setCreatedFromFilter}
+                onToChange={logs.setCreatedToFilter}
+                disabled={logs.loading}
+              />
+            ),
+          },
+        ]}
+        sort={{
+          value: logs.sortValue,
+          onValueChange: (value) => logs.setSortValue(value as ConversationEventSortValue),
+          options: CONVERSATION_EVENT_SORT_OPTIONS.map((item) => ({ label: t(item.labelKey), value: item.value })),
+        }}
+        loading={logs.loading}
+        onRefresh={() => void logs.loadConversationEvents(logs.page, logs.pageSize)}
+      />
+
+      <Table
+        viewportRef={virtualRows.viewportRef}
+        viewportClassName={virtualRows.viewportClassName}
+        viewportStyle={virtualRows.viewportStyle}
+      >
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="w-[72px]">ID</TableHead>
+            <TableHead>{t("columns.user")}</TableHead>
+            <TableHead>{t("columns.scope")}</TableHead>
+            <TableHead>{t("columns.event")}</TableHead>
+            <TableHead>{t("columns.status")}</TableHead>
+            <TableHead>{t("columns.upstream")}</TableHead>
+            <TableHead>{t("columns.tool")}</TableHead>
+            <TableHead>{t("columns.runID")}</TableHead>
+            <TableHead>{t("columns.time")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {logs.loading && logs.events.length === 0 ? <TableLoadingRow colSpan={9} /> : null}
+          {logs.events.length > 0 ? <VirtualTablePaddingRow colSpan={9} height={virtualRows.paddingTop} /> : null}
+          {logs.events.length > 0 ? virtualRows.rows.map(({ item }) => (
+            <TableRow key={item.id} className="cursor-pointer" onClick={() => onOpenDetail(item)}>
+              <TableCell className="font-mono text-xs text-foreground">{item.id}</TableCell>
+              <TableCell className="whitespace-nowrap text-muted-foreground">
+                {resolveUserDisplayName(item.userLabel, item.username, item.userID)}
+              </TableCell>
+              <TableCell className="whitespace-nowrap text-muted-foreground">{scopeLabel(item.eventScope)}</TableCell>
+              <TableCell>
+                <div className="max-w-[12rem] truncate" title={item.eventType || item.title || "-"}>{item.eventType || item.title || "-"}</div>
+              </TableCell>
+              <TableCell className="whitespace-nowrap">{eventStatusLabel(item.status)}</TableCell>
+              <TableCell>
+                <div className="max-w-[12rem] truncate text-muted-foreground" title={item.upstreamName || "-"}>{item.upstreamName || "-"}</div>
+              </TableCell>
+              <TableCell>
+                <div className="max-w-[10rem] truncate text-muted-foreground" title={item.toolName || "-"}>{item.toolName || "-"}</div>
+              </TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                <div className="max-w-[13rem] truncate" title={item.runID || "-"}>{item.runID || "-"}</div>
+              </TableCell>
+              <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(item.createdAt, locale)}</TableCell>
+            </TableRow>
+          )) : null}
+          {logs.events.length > 0 ? <VirtualTablePaddingRow colSpan={9} height={virtualRows.paddingBottom} /> : null}
+          {!logs.loading && logs.events.length === 0 ? <TableEmptyRow colSpan={9}>{t("conversation.empty")}</TableEmptyRow> : null}
+        </TableBody>
+      </Table>
+
+      <TablePagination
+        loading={logs.loading}
+        page={logs.page}
+        pageCount={logs.pageCount}
+        pageSize={logs.pageSize}
+        total={logs.total}
+        onPageChange={(nextPage) => void logs.loadConversationEvents(nextPage, logs.pageSize)}
+        onPageSizeChange={(nextPageSize) => void logs.loadConversationEvents(1, nextPageSize)}
+      />
+    </div>
+  );
+}
+
+const LOG_CLEANUP_TYPES: AdminLogCleanupType[] = [
+  "audit",
+  "auth",
+  "usage",
+  "orders",
+  "conversation",
+  "system",
+];
+
+function cleanupDateToISOString(value: string): string | null {
+  const [yearText, monthText, dayText] = value.trim().split("-");
+  const year = Number.parseInt(yearText ?? "", 10);
+  const month = Number.parseInt(monthText ?? "", 10);
+  const day = Number.parseInt(dayText ?? "", 10);
+  if (!year || !month || !day) {
+    return null;
+  }
+  const date = new Date(year, month - 1, day, 0, 0, 0, 0);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date.toISOString();
+}
+
+function LogCleanupDialog({
+  open,
+  onOpenChange,
+  onSuccess,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSuccess: (type: AdminLogCleanupType) => void;
+}) {
+  const t = useTranslations("adminLogs.cleanup");
+  const commonT = useTranslations("common.actions");
+  const [logType, setLogType] = React.useState<AdminLogCleanupType>("audit");
+  const [date, setDate] = React.useState("");
+  const [pending, setPending] = React.useState(false);
+  const highRisk = logType === "usage" || logType === "orders";
+
+  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+    if (pending) {
+      return;
+    }
+    onOpenChange(nextOpen);
+    if (!nextOpen) {
+      setLogType("audit");
+      setDate("");
+    }
+  }, [onOpenChange, pending]);
+
+  const submit = React.useCallback(async () => {
+    const before = cleanupDateToISOString(date);
+    if (!before) {
+      return;
+    }
+
+    setPending(true);
+    try {
+      const token = await resolveAccessToken();
+      if (!token) {
+        toast.error(t("toast.sessionExpired"), { description: t("toast.signInAgain") });
+        return;
+      }
+      const result = await cleanupAdminLogs(token, { type: logType, before });
+      toast.success(t("toast.success", { count: result.deletedCount }));
+      onSuccess(logType);
+      onOpenChange(false);
+      setLogType("audit");
+      setDate("");
+    } catch (error) {
+      toast.error(t("toast.failed"), { description: resolveAdminErrorMessage(error) });
+    } finally {
+      setPending(false);
+    }
+  }, [date, logType, onOpenChange, onSuccess, t]);
+
+  return (
+    <AlertDialog open={open} onOpenChange={handleOpenChange}>
+      <AlertDialogContent className="sm:max-w-[520px]">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("title")}</AlertDialogTitle>
+          <AlertDialogDescription>{t("description")}</AlertDialogDescription>
+        </AlertDialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <p className="text-xs text-muted-foreground">{t("typeLabel")}</p>
+            <Select
+              value={logType}
+              disabled={pending}
+              onValueChange={(value) => setLogType(value as AdminLogCleanupType)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {LOG_CLEANUP_TYPES.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {t(`types.${value}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <AdminDateTimePicker
+            value={date}
+            disabled={pending}
+            label={t("dateLabel")}
+            placeholder={t("datePlaceholder")}
+            granularity="date"
+            disabledDate={{ after: new Date() }}
+            onChange={setDate}
+          />
+
+          <div className="rounded-md bg-muted/35 px-3 py-2.5 text-xs leading-5">
+            <div className="flex items-center gap-2">
+              <p className={cn("font-medium", highRisk ? "text-destructive" : "text-foreground/80")}>
+                {t("impactTitle")}
+              </p>
+              {highRisk ? (
+                <Badge variant="secondary" className="h-5 rounded-md px-1.5 text-[10px] font-normal text-destructive shadow-none">
+                  {t("highRisk")}
+                </Badge>
+              ) : null}
+            </div>
+            <p className={cn("mt-1", highRisk ? "text-destructive/85" : "text-muted-foreground")}>
+              {t(`impacts.${logType}`)}
+            </p>
+          </div>
+
+          {date ? (
+            <p className="text-xs text-muted-foreground">
+              {t("boundary", { date })}
+            </p>
+          ) : null}
+        </div>
+
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>{commonT("cancel")}</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={pending || !cleanupDateToISOString(date)}
+            onClick={(event) => {
+              event.preventDefault();
+              void submit();
+            }}
+          >
+            {pending ? <SpinnerLabel>{t("deleting")}</SpinnerLabel> : t("confirm")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 export function AdminLogsPage() {
   const t = useTranslations("adminLogs");
   const [detail, setDetail] = React.useState<LogDetail | null>(null);
+  const [cleanupOpen, setCleanupOpen] = React.useState(false);
+  const [cleanupRevisions, setCleanupRevisions] = React.useState<Record<AdminLogCleanupType, number>>({
+    audit: 0,
+    auth: 0,
+    usage: 0,
+    orders: 0,
+    conversation: 0,
+    system: 0,
+  });
+
+  const handleCleanupSuccess = React.useCallback((type: AdminLogCleanupType) => {
+    setCleanupRevisions((current) => ({
+      ...current,
+      [type]: current[type] + 1,
+    }));
+  }, []);
 
   return (
     <div className="space-y-5 pb-10">
@@ -1199,6 +1918,16 @@ export function AdminLogsPage() {
         <div className="min-w-0">
           <h3 className="text-sm font-semibold">{t("centerTitle")}</h3>
         </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-8 gap-1.5 px-2 text-xs text-muted-foreground shadow-none hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => setCleanupOpen(true)}
+        >
+          <Trash2 className="size-3.5 stroke-1" />
+          {t("cleanup.trigger")}
+        </Button>
       </div>
 
       <Tabs defaultValue="audit" className="space-y-3">
@@ -1206,23 +1935,32 @@ export function AdminLogsPage() {
           <TabsTrigger value="audit">{t("tabs.audit")}</TabsTrigger>
           <TabsTrigger value="usage">{t("tabs.usage")}</TabsTrigger>
           <TabsTrigger value="auth">{t("tabs.auth")}</TabsTrigger>
-          <TabsTrigger value="system">{t("tabs.system")}</TabsTrigger>
+          <TabsTrigger value="orders">{t("tabs.orders")}</TabsTrigger>
+          <TabsTrigger value="conversation">{t("tabs.conversation")}</TabsTrigger>
         </TabsList>
         <TabsContent value="audit">
-          <AuditLogTable onOpenDetail={(item) => setDetail({ kind: "audit", item })} />
+          <AuditLogTable key={cleanupRevisions.audit} onOpenDetail={(item) => setDetail({ kind: "audit", item })} />
         </TabsContent>
         <TabsContent value="auth">
-          <AuthLogTable onOpenDetail={(item) => setDetail({ kind: "auth", item })} />
+          <AuthLogTable key={cleanupRevisions.auth} onOpenDetail={(item) => setDetail({ kind: "auth", item })} />
         </TabsContent>
         <TabsContent value="usage">
-          <UsageLogTable onOpenDetail={(item) => setDetail({ kind: "usage", item })} />
+          <UsageLogTable key={cleanupRevisions.usage} onOpenDetail={(item) => setDetail({ kind: "usage", item })} />
         </TabsContent>
-        <TabsContent value="system">
-          <SystemEventTable onOpenDetail={(item) => setDetail({ kind: "system", item })} />
+        <TabsContent value="orders">
+          <PaymentOrderTable key={cleanupRevisions.orders} onOpenDetail={(item) => setDetail({ kind: "order", item })} />
+        </TabsContent>
+        <TabsContent value="conversation">
+          <ConversationEventTable key={cleanupRevisions.conversation} onOpenDetail={(item) => setDetail({ kind: "conversation", item })} />
         </TabsContent>
       </Tabs>
 
       <LogDetailSheet detail={detail} onClose={() => setDetail(null)} />
+      <LogCleanupDialog
+        open={cleanupOpen}
+        onOpenChange={setCleanupOpen}
+        onSuccess={handleCleanupSuccess}
+      />
     </div>
   );
 }

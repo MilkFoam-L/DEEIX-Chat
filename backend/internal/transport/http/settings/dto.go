@@ -35,7 +35,6 @@ type SettingResponse struct {
 }
 
 type LoginPageSettingsResponse struct {
-	Title           string `json:"title"`
 	DefaultNextPath string `json:"defaultNextPath"`
 	LogoURL         string `json:"logoURL"`
 }
@@ -68,6 +67,11 @@ type NativeToolDefinitionResponse struct {
 // MCPPolicyResponse 返回聊天侧需要遵守的 MCP 工具运行策略。
 type MCPPolicyResponse struct {
 	MaxSelectedToolsPerMessage int `json:"maxSelectedToolsPerMessage"`
+}
+
+// ChatContextPolicyResponse 返回聊天侧上下文能力策略。
+type ChatContextPolicyResponse struct {
+	ContextCompactEnabled bool `json:"contextCompactEnabled"`
 }
 
 // ── mapping 函数 ─────────────────────────────────────────────────────────────

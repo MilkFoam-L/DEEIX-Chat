@@ -1,6 +1,11 @@
 import type { ChatAreaMessage } from "@/features/chat/types/messages";
+import {
+  resolveArtifactPreviewKind,
+  type ArtifactPreviewKind,
+} from "@/shared/lib/artifact-preview";
+import { brandText } from "@/shared/lib/branding";
 
-export type ArtifactPreviewKind = "html" | "css" | "javascript";
+export type { ArtifactPreviewKind } from "@/shared/lib/artifact-preview";
 
 export type ChatArtifact = {
   id: string;
@@ -22,7 +27,6 @@ export type OpenCodeArtifactInput = {
   kind: ArtifactPreviewKind;
 };
 
-const HTML_LIKE_RE = /^\s*(?:<!doctype\s+html|<html\b|<head\b|<body\b|<(?:article|canvas|div|main|section|style|script|svg)\b)/i;
 const SCRIPT_CLOSE_RE = /<\/script/gi;
 const STYLE_CLOSE_RE = /<\/style/gi;
 const FENCE_OPEN_RE = /^[ \t]*(`{3,}|~{3,})([^\n]*)$/;
@@ -50,10 +54,6 @@ const ARTIFACT_CSP = [
   "script-src 'unsafe-inline'",
 ].join("; ");
 
-function normalizeLanguage(language: string): string {
-  return language.trim().toLowerCase();
-}
-
 function parseFenceLanguage(info: string): string {
   const raw = info.trim().split(/\s+/)[0] ?? "";
   return raw.replace(/^\{?\.?/, "").replace(/\}?$/, "");
@@ -69,15 +69,6 @@ function isFenceClose(line: string, marker: string): boolean {
   const escaped = marker[0] === "`" ? "`" : "~";
   const re = new RegExp(`^[ \\t]*${escaped}{${marker.length},}[ \\t]*$`);
   return re.test(line);
-}
-
-export function resolveArtifactPreviewKind(language: string, code: string): ArtifactPreviewKind | null {
-  const normalized = normalizeLanguage(language);
-  if (["html", "htm", "xhtml"].includes(normalized)) return "html";
-  if (["css", "scss", "sass", "less"].includes(normalized)) return "css";
-  if (["js", "javascript", "mjs", "cjs"].includes(normalized)) return "javascript";
-  if ((!normalized || normalized === "markdown") && HTML_LIKE_RE.test(code)) return "html";
-  return null;
 }
 
 function escapeHTML(value: string): string {
@@ -176,7 +167,7 @@ ${previewHead("CSS Preview")}
 <body>
   <main class="artifact-preview">
     <section class="preview-panel">
-      <p class="eyebrow">DEEIX Artifact</p>
+      <p class="eyebrow">${escapeHTML(brandText.shortName)} Artifact</p>
       <h1>Preview Surface</h1>
       <p>Generated CSS is applied to this isolated document.</p>
       <div class="preview-row">

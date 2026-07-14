@@ -79,6 +79,7 @@ type Message struct {
 	Role             string     `gorm:"size:32;not null;default:'';index:idx_chat_messages_role;comment:消息角色(user/assistant/system/tool)"`
 	ContentType      string     `gorm:"size:32;not null;default:'';comment:消息内容类型"`
 	Content          string     `gorm:"type:text;not null;default:'';comment:消息内容"`
+	ReasoningContent string     `gorm:"type:text;not null;default:'';comment:上游推理内容回灌上下文"`
 	BranchReason     string     `gorm:"size:32;not null;default:'default';index:idx_chat_messages_branch_reason;comment:分支来源(default/retry/edit)"`
 	SourceMessageID  *uint      `gorm:"index:idx_chat_messages_source_message_id;comment:来源消息ID(重试/编辑源)"`
 	TokenUsage       int64      `gorm:"not null;default:0;comment:token总消耗"`
@@ -155,7 +156,7 @@ type FileObject struct {
 	FileName               string     `gorm:"size:255;not null;default:'';comment:文件名"`
 	MimeType               string     `gorm:"size:128;not null;default:'';comment:客户端声明媒体类型"`
 	DetectedMIME           string     `gorm:"size:128;not null;default:'';index:idx_file_objects_detected_mime;comment:后端探测媒体类型"`
-	FileCategory           string     `gorm:"size:32;not null;default:'unknown';index:idx_file_objects_file_category;comment:文件分类(image/pdf/word/excel/text/unknown)"`
+	FileCategory           string     `gorm:"size:32;not null;default:'unknown';index:idx_file_objects_file_category;comment:文件分类(image/pdf/word/presentation/excel/text/unknown)"`
 	SizeBytes              int64      `gorm:"not null;default:0;comment:文件大小(Byte)"`
 	SHA256                 string     `gorm:"size:64;not null;default:'';index:idx_file_objects_sha256;comment:文件SHA256"`
 	StoragePath            string     `gorm:"size:512;not null;default:'';comment:存储路径"`
@@ -304,27 +305,31 @@ func (ChatRunEvent) TableName() string {
 // ChatContextRecord 存储上下文快照和本轮上下文证据。
 type ChatContextRecord struct {
 	BaseModel
-	RecordType     string     `gorm:"size:32;not null;default:'';index:idx_chat_context_records_type;comment:记录类型(snapshot/artifact)"`
-	ConversationID uint       `gorm:"not null;default:0;index:idx_chat_context_records_conversation_id;index:idx_chat_context_records_conversation_message,priority:1;index:idx_chat_context_records_conversation_kind,priority:1;comment:会话ID"`
-	MessageID      uint       `gorm:"not null;default:0;index:idx_chat_context_records_message_id;index:idx_chat_context_records_conversation_message,priority:2;comment:触发消息ID"`
-	UserID         uint       `gorm:"not null;default:0;index:idx_chat_context_records_user_id;comment:用户ID"`
-	RunID          string     `gorm:"size:64;not null;default:'';index:idx_chat_context_records_run_id;comment:运行ID"`
-	FromTurn       int        `gorm:"not null;default:0;comment:压缩快照起始轮次"`
-	ToTurn         int        `gorm:"not null;default:0;comment:压缩快照结束轮次"`
-	SourceTokens   int64      `gorm:"not null;default:0;comment:原始Token数量"`
-	SummaryTokens  int64      `gorm:"not null;default:0;comment:摘要Token数量"`
-	SummaryText    string     `gorm:"type:text;not null;default:'';comment:摘要文本"`
-	Strategy       string     `gorm:"size:32;not null;default:'';comment:压缩策略"`
-	Kind           string     `gorm:"size:32;not null;default:'';index:idx_chat_context_records_kind;index:idx_chat_context_records_conversation_kind,priority:2;comment:证据类型"`
-	SourceType     string     `gorm:"size:32;not null;default:'';index:idx_chat_context_records_source_type;comment:来源类型"`
-	SourceID       string     `gorm:"size:128;not null;default:'';index:idx_chat_context_records_source_id;comment:来源ID"`
-	SourceTitle    string     `gorm:"size:255;not null;default:'';comment:来源标题"`
-	Content        string     `gorm:"type:text;not null;default:'';comment:证据文本或摘要"`
-	ContentHash    string     `gorm:"size:64;not null;default:'';index:idx_chat_context_records_content_hash;comment:证据内容Hash"`
-	TokenEstimate  int64      `gorm:"not null;default:0;comment:估算Token数"`
-	Score          float64    `gorm:"not null;default:0;comment:检索相关性分数"`
-	MetadataJSON   string     `gorm:"type:text;not null;default:'';comment:证据元数据JSON"`
-	ExpiresAt      *time.Time `gorm:"index:idx_chat_context_records_expires_at;comment:过期时间"`
+	RecordType            string     `gorm:"size:32;not null;default:'';index:idx_chat_context_records_type;comment:记录类型(snapshot/artifact)"`
+	ConversationID        uint       `gorm:"not null;default:0;index:idx_chat_context_records_conversation_id;index:idx_chat_context_records_conversation_message,priority:1;index:idx_chat_context_records_conversation_kind,priority:1;comment:会话ID"`
+	MessageID             uint       `gorm:"not null;default:0;index:idx_chat_context_records_message_id;index:idx_chat_context_records_conversation_message,priority:2;comment:触发消息ID"`
+	UserID                uint       `gorm:"not null;default:0;index:idx_chat_context_records_user_id;comment:用户ID"`
+	RunID                 string     `gorm:"size:64;not null;default:'';index:idx_chat_context_records_run_id;comment:运行ID"`
+	FromTurn              int        `gorm:"not null;default:0;comment:压缩快照起始轮次"`
+	ToTurn                int        `gorm:"not null;default:0;comment:压缩快照结束轮次"`
+	CoveredUntilMessageID uint       `gorm:"not null;default:0;index:idx_chat_context_records_covered_until_message_id;comment:快照覆盖到的最后消息ID"`
+	CoveredUntilPublicID  string     `gorm:"size:32;not null;default:'';index:idx_chat_context_records_covered_until_public_id;comment:快照覆盖到的最后消息公开ID"`
+	CoveragePathHash      string     `gorm:"size:64;not null;default:'';index:idx_chat_context_records_coverage_path_hash;comment:快照覆盖分支路径Hash"`
+	CoveredMessageCount   int        `gorm:"not null;default:0;comment:快照覆盖消息数"`
+	SourceTokens          int64      `gorm:"not null;default:0;comment:原始Token数量"`
+	SummaryTokens         int64      `gorm:"not null;default:0;comment:摘要Token数量"`
+	SummaryText           string     `gorm:"type:text;not null;default:'';comment:摘要文本"`
+	Strategy              string     `gorm:"size:32;not null;default:'';comment:压缩策略"`
+	Kind                  string     `gorm:"size:32;not null;default:'';index:idx_chat_context_records_kind;index:idx_chat_context_records_conversation_kind,priority:2;comment:证据类型"`
+	SourceType            string     `gorm:"size:32;not null;default:'';index:idx_chat_context_records_source_type;comment:来源类型"`
+	SourceID              string     `gorm:"size:128;not null;default:'';index:idx_chat_context_records_source_id;comment:来源ID"`
+	SourceTitle           string     `gorm:"size:255;not null;default:'';comment:来源标题"`
+	Content               string     `gorm:"type:text;not null;default:'';comment:证据文本或摘要"`
+	ContentHash           string     `gorm:"size:64;not null;default:'';index:idx_chat_context_records_content_hash;comment:证据内容Hash"`
+	TokenEstimate         int64      `gorm:"not null;default:0;comment:估算Token数"`
+	Score                 float64    `gorm:"not null;default:0;comment:检索相关性分数"`
+	MetadataJSON          string     `gorm:"type:text;not null;default:'';comment:证据元数据JSON"`
+	ExpiresAt             *time.Time `gorm:"index:idx_chat_context_records_expires_at;comment:过期时间"`
 }
 
 func (ChatContextRecord) TableName() string {

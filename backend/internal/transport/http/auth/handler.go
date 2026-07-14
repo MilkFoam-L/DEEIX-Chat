@@ -194,6 +194,75 @@ func (h *Handler) CompleteEmailRegistration(c *gin.Context) {
 	response.Success(c, toLoginResponse(result))
 }
 
+// StartPasswordReset godoc
+// @Summary 发送密码重置验证码
+// @Description SMTP 配置可用时，向已验证邮箱发送密码重置验证码；失败时返回通用错误，避免暴露账号状态
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body PasswordResetStartRequest true "密码重置验证码请求"
+// @Success 200 {object} PasswordResetStartResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 429 {object} ErrorDoc
+// @Router /auth/password/reset/start [post]
+func (h *Handler) StartPasswordReset(c *gin.Context) {
+	var req PasswordResetStartRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	result, err := h.service.RequestPasswordReset(
+		c.Request.Context(),
+		req.Email,
+		middleware.MustRequestID(c),
+		middleware.ResolveSessionAuditContext(c),
+	)
+	if err != nil {
+		if errors.Is(err, appauth.ErrPasswordResetFailed) {
+			response.Error(c, http.StatusBadRequest, "password reset failed")
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, "password reset failed")
+		return
+	}
+	response.Success(c, toPasswordResetStartResponse(result))
+}
+
+// CompletePasswordReset godoc
+// @Summary 完成密码重置
+// @Description 使用邮箱、验证码和新密码完成密码重置；失败时返回通用错误，避免暴露账号状态
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body PasswordResetCompleteRequest true "密码重置完成请求"
+// @Success 200 {object} PasswordResetCompleteResponseDoc
+// @Failure 400 {object} ErrorDoc
+// @Failure 429 {object} ErrorDoc
+// @Router /auth/password/reset/complete [post]
+func (h *Handler) CompletePasswordReset(c *gin.Context) {
+	var req PasswordResetCompleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	if err := h.service.CompletePasswordReset(
+		c.Request.Context(),
+		req.Email,
+		req.Code,
+		req.NewPassword,
+		middleware.MustRequestID(c),
+		middleware.ResolveSessionAuditContext(c),
+	); err != nil {
+		if errors.Is(err, appauth.ErrPasswordResetFailed) {
+			response.Error(c, http.StatusBadRequest, "password reset failed")
+			return
+		}
+		response.ErrorFrom(c, http.StatusBadRequest, err)
+		return
+	}
+	response.Success(c, PasswordResetCompleteResponse{Changed: true})
+}
+
 func (h *Handler) StartPasswordChangeVerification(c *gin.Context) {
 	userID := middleware.MustUserID(c)
 	if userID == 0 {
@@ -420,7 +489,7 @@ func (h *Handler) DeleteCurrentUserIdentity(c *gin.Context) {
 		return
 	}
 	rawID := c.Param("identity_id")
-	parsedID, err := strconv.ParseUint(rawID, 10, 64)
+	parsedID, err := strconv.ParseUint(rawID, 10, strconv.IntSize)
 	if err != nil || parsedID == 0 {
 		response.Error(c, http.StatusBadRequest, "invalid identity id")
 		return
@@ -502,6 +571,21 @@ func (h *Handler) CompleteProviderLogin(c *gin.Context) {
 		middleware.ResolveSessionAuditContext(c),
 	)
 	if err != nil {
+		var emailConflictErr *appauth.ProviderEmailConflictError
+		if errors.As(err, &emailConflictErr) {
+			response.ErrorWithDetails(
+				c,
+				http.StatusConflict,
+				"auth.provider_email_conflict",
+				err.Error(),
+				gin.H{
+					"providerSlug": emailConflictErr.ProviderSlug,
+					"email":        emailConflictErr.Email,
+					"action":       emailConflictErr.Action,
+				},
+			)
+			return
+		}
 		response.ErrorFrom(c, http.StatusBadRequest, err)
 		return
 	}
@@ -1084,6 +1168,8 @@ func (h *Handler) PatchUsername(c *gin.Context) {
 	item, err := h.service.UpdateUsernameOnce(c.Request.Context(), userID, toUpdateUsernameInput(req))
 	if err != nil {
 		switch {
+		case errors.Is(err, appauth.ErrUsernameChangeRequired):
+			response.Error(c, http.StatusBadRequest, appauth.ErrUsernameChangeRequired.Error())
 		case errors.Is(err, appauth.ErrInvalidUsername):
 			response.Error(c, http.StatusBadRequest, "invalid username")
 		case errors.Is(err, appauth.ErrUsernameTaken):

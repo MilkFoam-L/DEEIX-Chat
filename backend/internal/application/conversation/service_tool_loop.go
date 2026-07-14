@@ -109,7 +109,7 @@ func normalizeStreamServerToolStatus(status string) string {
 	switch strings.TrimSpace(status) {
 	case "", "completed", "success":
 		return "success"
-	case "in_progress", "queued", "searching":
+	case "in_progress", "queued", "searching", "generating":
 		return "streaming"
 	case "failed", "error":
 		return "error"
@@ -166,6 +166,7 @@ func addLLMUsage(left llm.Usage, right llm.Usage) llm.Usage {
 		ReasoningTokens:    left.ReasoningTokens + right.ReasoningTokens,
 		Speed:              mergeLLMUsageSpeed(left.Speed, right.Speed),
 		ServiceTier:        mergeLLMUsageServiceTier(left.ServiceTier, right.ServiceTier),
+		RawUsageJSON:       llm.MergeRawUsageJSON(left.RawUsageJSON, right.RawUsageJSON),
 	}
 }
 
@@ -180,6 +181,7 @@ func diffLLMUsage(current llm.Usage, previous llm.Usage) llm.Usage {
 		ReasoningTokens:    nonNegativeTokenDelta(current.ReasoningTokens, previous.ReasoningTokens),
 		Speed:              strings.TrimSpace(current.Speed),
 		ServiceTier:        strings.TrimSpace(current.ServiceTier),
+		RawUsageJSON:       diffLLMUsageRawJSON(current.RawUsageJSON, previous.RawUsageJSON),
 	}
 }
 
@@ -226,6 +228,14 @@ func addServerSideToolUsage(left map[string]int64, right map[string]int64) map[s
 	return result
 }
 
+func diffLLMUsageRawJSON(current string, previous string) string {
+	current = strings.TrimSpace(current)
+	if current == "" || current == strings.TrimSpace(previous) {
+		return ""
+	}
+	return current
+}
+
 func mergeLLMUsageSpeed(left string, right string) string {
 	left = strings.TrimSpace(strings.ToLower(left))
 	right = strings.TrimSpace(strings.ToLower(right))
@@ -255,4 +265,12 @@ func buildFinalToolSynthesisMessages(messages []llm.Message, instruction string)
 		Content: strings.TrimSpace(instruction),
 	})
 	return result
+}
+
+// toolRunFinalAnswerMissing 判断工具循环在预算耗尽时是否只剩未执行的结构化工具调用。
+func toolRunFinalAnswerMissing(output *llm.GenerateOutput, toolLoopStarted bool, llmCallCount int, maxLLMCalls int, remainingToolCalls int) bool {
+	if output == nil || !toolLoopStarted {
+		return false
+	}
+	return len(output.ToolCalls) > 0 && (llmCallCount >= maxLLMCalls || remainingToolCalls <= 0)
 }

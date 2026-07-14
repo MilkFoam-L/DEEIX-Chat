@@ -9,7 +9,7 @@ import { fetchFileContent } from "@/shared/api/file";
 import type { FileObjectDTO } from "@/shared/api/file.types";
 
 import type { FilePreviewKind } from "@/features/files/types/files";
-import { isFileReady, isImageFile, resolveFileExtension, resolveFilePreviewKind } from "@/features/files/utils/file-display";
+import { isFileReady, isImageFile, resolveFileExtension, resolveFilePreviewKind } from "@/shared/lib/file-display";
 
 function isReadableTextContent(content: string): boolean {
   if (!content) {
@@ -128,10 +128,9 @@ export function useFilePreview({ file, getAccessToken }: UseFilePreviewOptions) 
         const result = await fetchFileContent(accessToken, file.fileID);
         let kind = resolveFilePreviewKind(file, result.contentType);
         const objectURL = URL.createObjectURL(result.blob);
-        objectURLRef.current = objectURL;
 
         let textContent: string | null = null;
-        if (["markdown", "code", "text"].includes(kind)) {
+        if (kind === "markdown" || kind === "code" || kind === "text") {
           const textPreview = await tryReadTextPreview(result.blob);
           textContent = textPreview.textContent;
           if (textContent === null) {
@@ -149,12 +148,10 @@ export function useFilePreview({ file, getAccessToken }: UseFilePreviewOptions) 
 
         if (cancelled) {
           URL.revokeObjectURL(objectURL);
-          if (objectURLRef.current === objectURL) {
-            objectURLRef.current = null;
-          }
           return;
         }
 
+        objectURLRef.current = objectURL;
         setPreview({
           status: "ready",
           kind,

@@ -36,23 +36,27 @@ import {
   type UserSortValue,
 } from "@/features/admin/types/accounts";
 import {
-  resolveErrorMessage,
   resolveSubscriptionExpiryInputValue,
   resolveSubscriptionExpiryDate,
   resolveSubscriptionExpiryISO,
 } from "@/features/admin/utils/account-display";
+import { resolveAdminErrorMessage } from "@/features/admin/utils/admin-error";
 import { patchByID, removeByID, removeManyByID, replaceByID, restoreAt, restoreManyAt } from "@/shared/lib/optimistic-list";
+import { runBulkActionInChunks, runSettledBulkItems } from "@/shared/lib/bulk-action";
 import { resolveTimeZoneOptions } from "@/shared/lib/time-zone";
-import { useUserFilters } from "./use-user-filters";
-import { useUserSelection } from "./use-user-selection";
+import { useAdminUserFilters } from "./use-admin-user-filters";
+import { useAdminUserSelection } from "./use-admin-user-selection";
 
 type UseAdminUsersPageParams = {
   items: UserDTO[];
   total: number;
   page: number;
   pageSize: number;
+  query: string;
+  setQuery: (value: string) => void;
   viewerRole?: string;
-  onLoadUsers: (page: number, pageSize?: number) => Promise<void>;
+  onLoadUsers: () => Promise<void>;
+  onSetPage: (value: number) => void;
   onSetUsers: React.Dispatch<React.SetStateAction<UserDTO[]>>;
   onSetTotal: React.Dispatch<React.SetStateAction<number>>;
 };
@@ -106,7 +110,6 @@ type UseAdminUsersPageState = {
   createAvatarSource: Pick<CreateUserPayload, "username" | "displayName">;
   avatarDialogPreviewSrc: string | undefined;
   editStatusChanged: boolean;
-  pageCount: number;
   batchTimezoneOptions: { label: string; value: string }[];
   filteredItems: UserDTO[];
   selectAllState: boolean | "indeterminate";
@@ -193,8 +196,11 @@ export function useAdminUsersPage({
   total,
   page,
   pageSize,
+  query,
+  setQuery,
   viewerRole,
   onLoadUsers,
+  onSetPage,
   onSetUsers,
   onSetTotal,
 }: UseAdminUsersPageParams): UseAdminUsersPageState {
@@ -213,8 +219,6 @@ export function useAdminUsersPage({
   const [deleteDialogTarget, setDeleteDialogTarget] = React.useState<UserDTO | null>(null);
   const [resetTwoFactorDialogTarget, setResetTwoFactorDialogTarget] = React.useState<UserDTO | null>(null);
   const {
-    query,
-    setQuery,
     roleFilter,
     setRoleFilter,
     statusFilter,
@@ -224,7 +228,7 @@ export function useAdminUsersPage({
     sortValue,
     setSortValue,
     filteredItems,
-  } = useUserFilters(items);
+  } = useAdminUserFilters(items);
   const canManageUser = React.useCallback(
     (user: UserDTO) => viewerRole === "superadmin" || user.role !== "superadmin",
     [viewerRole],
@@ -240,7 +244,7 @@ export function useAdminUsersPage({
     handleSelectAllVisible,
     handleToggleSelectedUser,
     setSelectedUserIDs,
-  } = useUserSelection(items, selectableFilteredItems);
+  } = useAdminUserSelection(items, selectableFilteredItems);
   const [batchRole, setBatchRole] = React.useState<AdminUserRole | "">("");
   const [batchStatus, setBatchStatus] = React.useState<AdminUserStatus | "">("");
   const [batchTimezone, setBatchTimezone] = React.useState("");
@@ -282,7 +286,6 @@ export function useAdminUsersPage({
   }, [avatarDialog, createAvatarSource]);
 
   const editStatusChanged = editDialogTarget ? editPayload.status !== editDialogTarget.status : false;
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const batchTimezoneOptions = React.useMemo(
     () => timeZoneOptions.map((timeZone) => ({ label: timeZone, value: timeZone })),
     [timeZoneOptions],
@@ -333,12 +336,16 @@ export function useAdminUsersPage({
     async (nextPage = page) => {
       setPendingAction("refresh");
       try {
-        await onLoadUsers(nextPage, pageSize);
+        if (nextPage !== page) {
+          onSetPage(nextPage);
+          return;
+        }
+        await onLoadUsers();
       } finally {
         setPendingAction("");
       }
     },
-    [onLoadUsers, page, pageSize],
+    [onLoadUsers, onSetPage, page],
   );
 
   const handleOpenEditDialog = React.useCallback((user: UserDTO) => {
@@ -392,7 +399,7 @@ export function useAdminUsersPage({
       } catch (error) {
         onSetUsers((current) => replaceByID(current, item.id, (user) => user.id, previousItem));
         toast.error(t("toast.inlineUpdateFailed", { field: field === "role" ? t("fields.role") : t("fields.status") }), {
-          description: resolveErrorMessage(error),
+          description: resolveAdminErrorMessage(error),
         });
       } finally {
         setInlinePending((current) => {
@@ -462,14 +469,18 @@ export function useAdminUsersPage({
         setAvatarDialog({ mode: "closed" });
         setCreateDialogOpen(false);
         toast.success(t("toast.createSucceeded"));
-        await onLoadUsers(1, pageSize);
+        if (page === 1) {
+          await onLoadUsers();
+        } else {
+          onSetPage(1);
+        }
       } catch (error) {
-        toast.error(t("toast.createFailed"), { description: resolveErrorMessage(error) });
+        toast.error(t("toast.createFailed"), { description: resolveAdminErrorMessage(error) });
       } finally {
         setPendingAction("");
       }
     },
-    [billingMode, createPayload, onLoadUsers, pageSize, pendingAction, t],
+    [billingMode, createPayload, onLoadUsers, onSetPage, page, pendingAction, t],
   );
 
   const handleSaveAvatarDialog = React.useCallback(async () => {
@@ -510,7 +521,7 @@ export function useAdminUsersPage({
       );
       setAvatarDialog({ mode: "closed" });
     } catch (error) {
-      toast.error(t("toast.avatarUpdateFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.avatarUpdateFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
       setActionUserID(null);
@@ -597,11 +608,11 @@ export function useAdminUsersPage({
     }
 
     const billingBalanceChanged =
-      billingMode === "usage" &&
+      billingMode !== "self" &&
       Number.isFinite(nextBillingBalance) &&
       roundBillingBalance(nextBillingBalance) !== roundBillingBalance(editDialogTarget.billingBalanceUSD ?? 0);
 
-    if (billingMode === "usage" && (!Number.isFinite(nextBillingBalance) || nextBillingBalance < 0)) {
+    if (billingMode !== "self" && (!Number.isFinite(nextBillingBalance) || nextBillingBalance < 0)) {
       toast.error(t("toast.editFailed"), { description: t("validation.invalidUsageBalance") });
       return;
     }
@@ -640,7 +651,7 @@ export function useAdminUsersPage({
       toast.success(t("toast.userUpdated"));
       setEditDialogTarget(null);
     } catch (error) {
-      toast.error(t("toast.editFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.editFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
       setActionUserID(null);
@@ -678,7 +689,7 @@ export function useAdminUsersPage({
       setResetPasswordDraft("");
       setResetDialogTarget(null);
     } catch (error) {
-      toast.error(t("toast.resetPasswordFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.resetPasswordFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
       setActionUserID(null);
@@ -708,7 +719,7 @@ export function useAdminUsersPage({
       toast.success(t("toast.twoFactorReset"));
       setResetTwoFactorDialogTarget(null);
     } catch (error) {
-      toast.error(t("toast.twoFactorResetFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.twoFactorResetFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
       setActionUserID(null);
@@ -737,7 +748,7 @@ export function useAdminUsersPage({
       await revokeAdminUserSessions(token, userID);
       toast.success(t("toast.sessionsRevoked"));
     } catch (error) {
-      toast.error(t("toast.revokeSessionsFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.revokeSessionsFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
       setActionUserID(null);
@@ -771,7 +782,7 @@ export function useAdminUsersPage({
     } catch (error) {
       onSetUsers((current) => restoreAt(current, user, removedIndex, (item) => item.id));
       onSetTotal((current) => Math.max(current, total));
-      toast.error(t("toast.deleteFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.deleteFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
       setActionUserID(null);
@@ -805,18 +816,19 @@ export function useAdminUsersPage({
       onSetUsers((current) =>
         current.map((item) => (targetIDs.has(item.id) ? { ...item, role: nextRole } : item)),
       );
-      const results = await Promise.allSettled(
-        targets.map((item) =>
+      const results = await runSettledBulkItems({
+        items: targets,
+        title: t("toast.bulkRoleUpdated", { count: targets.length }),
+        runItem: (item) =>
           patchAdminUser(token, item.id, {
             role: nextRole,
             reason: "bulk_update_role",
           }),
-        ),
-      );
-      const failedUsers = targets.filter((_, index) => results[index]?.status === "rejected");
-      const successUsers = targets.filter((_, index) => results[index]?.status === "fulfilled");
+      });
+      const failedUsers = results.filter((result) => result.status === "rejected").map((result) => result.item);
+      const successUsers = results.filter((result) => result.status === "fulfilled").map((result) => result.item);
       const successResponses = results
-        .filter((result): result is PromiseFulfilledResult<{ user: UserDTO }> => result.status === "fulfilled")
+        .filter((result): result is Extract<typeof result, { status: "fulfilled" }> => result.status === "fulfilled")
         .map((result) => result.value.user);
       onSetUsers((current) => successResponses.reduce((next, user) => replaceByID(next, user.id, (item) => item.id, user), current));
       if (failedUsers.length > 0) {
@@ -832,7 +844,7 @@ export function useAdminUsersPage({
       setBatchRole("");
     } catch (error) {
       onSetUsers((current) => restoreManyAt(current, rollbackUsers, (item) => item.id));
-      toast.error(t("toast.bulkRoleFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.bulkRoleFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
     }
@@ -865,18 +877,19 @@ export function useAdminUsersPage({
       onSetUsers((current) =>
         current.map((item) => (targetIDs.has(item.id) ? { ...item, status: nextStatus } : item)),
       );
-      const results = await Promise.allSettled(
-        targets.map((item) =>
+      const results = await runSettledBulkItems({
+        items: targets,
+        title: t("toast.bulkStatusUpdated", { count: targets.length }),
+        runItem: (item) =>
           patchAdminUser(token, item.id, {
             status: nextStatus,
             reason: "bulk_update_status",
           }),
-        ),
-      );
-      const failedUsers = targets.filter((_, index) => results[index]?.status === "rejected");
-      const successUsers = targets.filter((_, index) => results[index]?.status === "fulfilled");
+      });
+      const failedUsers = results.filter((result) => result.status === "rejected").map((result) => result.item);
+      const successUsers = results.filter((result) => result.status === "fulfilled").map((result) => result.item);
       const successResponses = results
-        .filter((result): result is PromiseFulfilledResult<{ user: UserDTO }> => result.status === "fulfilled")
+        .filter((result): result is Extract<typeof result, { status: "fulfilled" }> => result.status === "fulfilled")
         .map((result) => result.value.user);
       onSetUsers((current) => successResponses.reduce((next, user) => replaceByID(next, user.id, (item) => item.id, user), current));
       if (failedUsers.length > 0) {
@@ -892,7 +905,7 @@ export function useAdminUsersPage({
       setBatchStatus("");
     } catch (error) {
       onSetUsers((current) => restoreManyAt(current, rollbackUsers, (item) => item.id));
-      toast.error(t("toast.bulkStatusFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.bulkStatusFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
     }
@@ -917,8 +930,22 @@ export function useAdminUsersPage({
 
       onSetUsers((current) => removeManyByID(current, selectedIDs, (item) => item.id));
       onSetTotal((current) => Math.max(0, current - selectedIDs.length));
-      const results = await Promise.allSettled(selectedUsers.map((item) => deleteAdminUser(token, item.id)));
-      const failedUsers = selectedUsers.filter((_, index) => results[index]?.status === "rejected");
+      const failedIDs = new Set<number>();
+      await runBulkActionInChunks({
+        chunkSize: 10,
+        items: selectedUsers,
+        title: t("toast.bulkDeleting"),
+        runChunk: async (chunk) => {
+          for (const item of chunk) {
+            try {
+              await deleteAdminUser(token, item.id);
+            } catch {
+              failedIDs.add(item.id);
+            }
+          }
+        },
+      });
+      const failedUsers = selectedUsers.filter((item) => failedIDs.has(item.id));
       const successCount = selectedUsers.length - failedUsers.length;
       if (failedUsers.length > 0) {
         const failedRollbackUsers = failedUsers.map((item) => ({ item, index: items.findIndex((current) => current.id === item.id) }));
@@ -934,7 +961,7 @@ export function useAdminUsersPage({
     } catch (error) {
       onSetUsers((current) => restoreManyAt(current, rollbackUsers, (item) => item.id));
       onSetTotal((current) => Math.max(current, total));
-      toast.error(t("toast.bulkDeleteFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.bulkDeleteFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
     }
@@ -966,15 +993,16 @@ export function useAdminUsersPage({
       onSetUsers((current) =>
         current.map((item) => (targetIDs.has(item.id) ? { ...item, timezone: nextTimezone } : item)),
       );
-      const results = await Promise.allSettled(
-        targets.map((item) =>
+      const results = await runSettledBulkItems({
+        items: targets,
+        title: t("toast.bulkTimezoneUpdated", { count: targets.length }),
+        runItem: (item) =>
           patchAdminUser(token, item.id, {
             timezone: nextTimezone,
           }),
-        ),
-      );
-      const failedUsers = targets.filter((_, index) => results[index]?.status === "rejected");
-      const successUsers = targets.filter((_, index) => results[index]?.status === "fulfilled");
+      });
+      const failedUsers = results.filter((result) => result.status === "rejected").map((result) => result.item);
+      const successUsers = results.filter((result) => result.status === "fulfilled").map((result) => result.item);
       if (failedUsers.length > 0) {
         const failedRollbackUsers = failedUsers.map((item) => ({ item, index: items.findIndex((current) => current.id === item.id) }));
         onSetUsers((current) => restoreManyAt(current, failedRollbackUsers, (item) => item.id));
@@ -988,7 +1016,7 @@ export function useAdminUsersPage({
       setBatchTimezone("");
     } catch (error) {
       onSetUsers((current) => restoreManyAt(current, rollbackUsers, (item) => item.id));
-      toast.error(t("toast.bulkTimezoneFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.bulkTimezoneFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
     }
@@ -1000,7 +1028,7 @@ export function useAdminUsersPage({
     if (!selectedUsers.length || !batchBalance.trim() || pendingAction) {
       return;
     }
-    if (billingMode !== "usage") {
+    if (billingMode === "self") {
       return;
     }
     if (!Number.isFinite(nextBalance) || nextBalance < 0) {
@@ -1029,18 +1057,19 @@ export function useAdminUsersPage({
       onSetUsers((current) =>
         current.map((item) => (targetIDs.has(item.id) ? { ...item, billingBalanceUSD: roundedBalance } : item)),
       );
-      const results = await Promise.allSettled(
-        targets.map((item) =>
+      const results = await runSettledBulkItems({
+        items: targets,
+        title: t("toast.bulkBalanceUpdated", { count: targets.length }),
+        runItem: (item) =>
           updateAdminBillingAccountBalance(token, item.id, {
             balanceUSD: roundedBalance,
             description: t("toast.bulkBalanceAdjustmentDescription"),
           }),
-        ),
-      );
-      const failedUsers = targets.filter((_, index) => results[index]?.status === "rejected");
-      const successUsers = targets.filter((_, index) => results[index]?.status === "fulfilled");
+      });
+      const failedUsers = results.filter((result) => result.status === "rejected").map((result) => result.item);
+      const successUsers = results.filter((result) => result.status === "fulfilled").map((result) => result.item);
       const successResponses = results
-        .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof updateAdminBillingAccountBalance>>> => result.status === "fulfilled")
+        .filter((result): result is Extract<typeof result, { status: "fulfilled" }> => result.status === "fulfilled")
         .map((result) => result.value.account);
       onSetUsers((current) =>
         successResponses.reduce(
@@ -1065,7 +1094,7 @@ export function useAdminUsersPage({
       setBatchBalance("");
     } catch (error) {
       onSetUsers((current) => restoreManyAt(current, rollbackUsers, (item) => item.id));
-      toast.error(t("toast.bulkBalanceFailed"), { description: resolveErrorMessage(error) });
+      toast.error(t("toast.bulkBalanceFailed"), { description: resolveAdminErrorMessage(error) });
     } finally {
       setPendingAction("");
     }
@@ -1125,7 +1154,6 @@ export function useAdminUsersPage({
     createAvatarSource,
     avatarDialogPreviewSrc,
     editStatusChanged,
-    pageCount,
     batchTimezoneOptions,
     filteredItems,
     selectAllState,

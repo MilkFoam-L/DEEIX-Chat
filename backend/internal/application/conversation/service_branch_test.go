@@ -111,3 +111,44 @@ func TestSelectLatestDefaultParentCandidateFallsBackToSuccessfulUser(t *testing.
 		t.Fatalf("expected successful user fallback as parent, got %#v", parent)
 	}
 }
+
+func TestTruncateContextByTokenBudgetCountsAssistantReasoningWhenEnabled(t *testing.T) {
+	messages := []model.Message{
+		{ID: 1, Role: "user", Content: "first"},
+		{ID: 2, Role: "assistant", Content: "ok", ReasoningContent: "this reasoning content is deliberately long enough to exceed the tiny budget"},
+		{ID: 3, Role: "user", Content: "next"},
+	}
+
+	withReasoning := truncateContextByTokenBudget(messages, 6, true)
+	if len(withReasoning) != 1 || withReasoning[0].ID != 3 {
+		t.Fatalf("expected only latest message when reasoning is counted, got %#v", withReasoning)
+	}
+
+	withoutReasoning := truncateContextByTokenBudget(messages, 6, false)
+	if len(withoutReasoning) != 3 {
+		t.Fatalf("expected all messages when reasoning is omitted, got %#v", withoutReasoning)
+	}
+}
+
+func TestBuildBranchMessagePathReusesExistingUserForAssistantRetry(t *testing.T) {
+	rootID := uint(1)
+	userID := uint(2)
+	assistantID := uint(3)
+	branch := &messageBranchState{
+		ExistingMessages: []model.Message{
+			{ID: rootID, PublicID: "msg_root", Role: "assistant", Status: "success"},
+			{ID: userID, PublicID: "msg_user", ParentMessageID: &rootID, Role: "user", Status: "success"},
+		},
+		ReuseUserMessage: &model.Message{ID: userID, PublicID: "msg_user", ParentMessageID: &rootID, Role: "user", Status: "success"},
+	}
+	assistantMessage := &model.Message{ID: assistantID, PublicID: "msg_assistant_retry", ParentMessageID: &userID, Role: "assistant", Status: "pending"}
+
+	path := buildBranchMessagePath(branch, assistantMessage)
+
+	if len(path) != 2 {
+		t.Fatalf("expected reused user path without pending assistant, got %#v", path)
+	}
+	if path[0].ID != rootID || path[1].ID != userID {
+		t.Fatalf("expected root -> reused user path, got %#v", path)
+	}
+}
