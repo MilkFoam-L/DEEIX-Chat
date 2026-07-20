@@ -108,6 +108,7 @@ import {
   normalizeModelCapabilitiesJSON,
   setImageStreamEnabledInCapabilities,
 } from "@/features/admin/components/sections/models/models-capabilities-config";
+import { getSystemModelCapabilitiesPreset } from "@/features/admin/components/sections/models/models-capabilities-presets";
 import type { NativeToolDefinition } from "@/shared/lib/model-option-policy";
 import {
   DEFAULT_MODEL_SOURCE_BIND_DRAFT,
@@ -146,6 +147,36 @@ type VendorOption = {
 };
 
 const UNKNOWN_VENDOR = "unknown";
+const OPENAI_RESPONSES_CAPABILITIES_PRESET = getSystemModelCapabilitiesPreset("openai_responses");
+
+function isConversationModel(kinds: string[]): boolean {
+  return kinds.includes("chat") || kinds.includes("audio");
+}
+
+function hasEmptyCapabilities(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) {
+    return true;
+  }
+  try {
+    const payload = JSON.parse(normalized) as unknown;
+    return Boolean(payload && typeof payload === "object" && !Array.isArray(payload) && Object.keys(payload).length === 0);
+  } catch {
+    return false;
+  }
+}
+
+function applyOpenAIResponsesCapabilitiesDefault(form: FormState, routeProtocols: string[]): FormState {
+  const usesResponsesByDefault = routeProtocols.length === 0 || routeProtocols.includes("openai_responses");
+  const shouldApply = form.vendor === "openai" && isConversationModel(form.kinds) && usesResponsesByDefault;
+  if (shouldApply && hasEmptyCapabilities(form.capabilitiesJSON)) {
+    return { ...form, capabilitiesJSON: OPENAI_RESPONSES_CAPABILITIES_PRESET };
+  }
+  if (!shouldApply && form.capabilitiesJSON.trim() === OPENAI_RESPONSES_CAPABILITIES_PRESET.trim()) {
+    return { ...form, capabilitiesJSON: "" };
+  }
+  return form;
+}
 
 const MODEL_SHEET_VENDOR_OPTIONS: VendorOption[] = [
   { value: UNKNOWN_VENDOR, label: "Unknown", iconUrl: null },
@@ -313,13 +344,17 @@ export function ModelSheet({ open, mode, target, models, onClose, onSuccess }: M
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  function setVendor(value: AdminLLMModelVendor) {
+    setForm((prev) => applyOpenAIResponsesCapabilitiesDefault({ ...prev, vendor: value }, routeProtocols));
+  }
+
   function toggleKind(kind: string) {
-    setForm((prev) => ({
+    setForm((prev) => applyOpenAIResponsesCapabilitiesDefault({
       ...prev,
       kinds: prev.kinds.includes(kind)
         ? prev.kinds.filter((k) => k !== kind)
         : [...prev.kinds, kind],
-    }));
+    }, routeProtocols));
   }
 
   const loadUpstreams = useCallback(async () => {
@@ -462,6 +497,13 @@ export function ModelSheet({ open, mode, target, models, onClose, onSuccess }: M
     ])),
     [bindRows, sources, target?.protocolsJSON],
   );
+  useEffect(() => {
+    if (mode !== "create") {
+      return;
+    }
+    setForm((prev) => applyOpenAIResponsesCapabilitiesDefault(prev, routeProtocols));
+  }, [mode, routeProtocols]);
+
   function getBindProtocolOptions(row: ModelSourceBindDraftRow): AdminLLMAdapter[] {
     const upstreamModels = upstreamModelsByID[row.draft.upstreamID] ?? [];
     const selectedUpstreamModel = upstreamModels.find((item) => String(item.id) === row.draft.upstreamModelID);
@@ -694,6 +736,7 @@ export function ModelSheet({ open, mode, target, models, onClose, onSuccess }: M
           kindsJSON: kindsJson,
           icon: form.icon.trim() || undefined,
           capabilitiesJSON: normalizeModelCapabilitiesJSON(form.capabilitiesJSON, nativeTools, routeProtocols) || undefined,
+          protocol: routeProtocols.length === 1 ? routeProtocols[0] : undefined,
           systemPrompt: form.systemPrompt.trim() || undefined,
           accessScope: form.accessScope,
           status: form.status,
@@ -814,7 +857,7 @@ export function ModelSheet({ open, mode, target, models, onClose, onSuccess }: M
                   id="model-vendor"
                   items={vendorOptions}
                   value={selectedVendorOption}
-                  onValueChange={(item) => setField("vendor", item?.value ?? UNKNOWN_VENDOR)}
+                  onValueChange={(item) => setVendor(item?.value ?? UNKNOWN_VENDOR)}
                   itemToStringLabel={(item) => item?.label ?? ""}
                   isItemEqualToValue={(item, selected) => item.value === selected.value}
                   disabled={pending}

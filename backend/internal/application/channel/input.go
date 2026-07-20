@@ -47,6 +47,7 @@ type CreateModelInput struct {
 	KindsJSON          string
 	Icon               string
 	CapabilitiesJSON   string
+	Protocol           string
 	SystemPrompt       string
 	AccessScope        string
 	Status             string

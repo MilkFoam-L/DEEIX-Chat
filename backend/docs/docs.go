@@ -14421,6 +14421,10 @@ const docTemplate = `{
                     "maxLength": 128,
                     "minLength": 2
                 },
+                "protocol": {
+                    "type": "string",
+                    "maxLength": 64
+                },
                 "status": {
                     "type": "string",
                     "enum": [

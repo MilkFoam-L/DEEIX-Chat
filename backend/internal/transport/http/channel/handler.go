@@ -972,6 +972,7 @@ func (h *Handler) CreateModel(c *gin.Context) {
 		KindsJSON:          req.KindsJSON,
 		Icon:               req.Icon,
 		CapabilitiesJSON:   req.CapabilitiesJSON,
+		Protocol:           req.Protocol,
 		SystemPrompt:       req.SystemPrompt,
 		AccessScope:        req.AccessScope,
 		Status:             req.Status,
@@ -989,6 +990,8 @@ func (h *Handler) CreateModel(c *gin.Context) {
 			response.Error(c, http.StatusBadRequest, "invalid json config")
 		case errors.Is(err, appchannel.ErrInvalidKinds):
 			response.Error(c, http.StatusBadRequest, "invalid kinds")
+		case errors.Is(err, appchannel.ErrInvalidAdapter):
+			response.Error(c, http.StatusBadRequest, "invalid adapter")
 		case errors.Is(err, appchannel.ErrInvalidModelAccessScope):
 			response.Error(c, http.StatusBadRequest, "invalid model access scope")
 		case errors.Is(err, appchannel.ErrSystemPromptTooLong):

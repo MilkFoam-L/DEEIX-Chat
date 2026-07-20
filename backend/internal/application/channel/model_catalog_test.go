@@ -31,6 +31,27 @@ func TestProtocolDefaultsForCompatibleOnlyIncludesSupportedPrimaryKinds(t *testi
 	}
 }
 
+func TestProtocolDefaultsForOpenAIUsesResponsesForConversationKinds(t *testing.T) {
+	raw := protocolDefaultsForCompatible(compatibleOpenAI)
+
+	var defaults map[string]string
+	if err := json.Unmarshal([]byte(raw), &defaults); err != nil {
+		t.Fatalf("unmarshal defaults: %v", err)
+	}
+	if defaults[modelKindChat] != llm.AdapterOpenAIResponses {
+		t.Fatalf("expected OpenAI chat default %q, got %q in %s", llm.AdapterOpenAIResponses, defaults[modelKindChat], raw)
+	}
+	if defaults[modelKindAudio] != llm.AdapterOpenAIResponses {
+		t.Fatalf("expected OpenAI audio default %q, got %q in %s", llm.AdapterOpenAIResponses, defaults[modelKindAudio], raw)
+	}
+}
+
+func TestResolveNewModelCapabilitiesPreservesExplicitNonObjectJSON(t *testing.T) {
+	if got := resolveNewModelCapabilitiesJSON("null", "openai", `["chat"]`, ""); got != "null" {
+		t.Fatalf("expected explicit non-empty capabilities to be preserved, got %q", got)
+	}
+}
+
 func TestProtocolDefaultsForXAIUsesXAIResponsesForConversationKinds(t *testing.T) {
 	raw := protocolDefaultsForCompatible(compatibleXAI)
 

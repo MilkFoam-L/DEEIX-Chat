@@ -83,7 +83,7 @@ func (s *Service) UpsertUpstreamModel(ctx context.Context, upstreamID uint, inpu
 		return nil, err
 	}
 
-	platformModel, platformModelCreated, err := s.ensurePlatformModel(ctx, platformModelName, kindsJSON, upstreamModelName)
+	platformModel, platformModelCreated, err := s.ensurePlatformModel(ctx, platformModelName, kindsJSON, protocol, upstreamModelName)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func (s *Service) validateRouteProtocolCombination(
 	return nil
 }
 
-func (s *Service) ensurePlatformModel(ctx context.Context, platformModelName string, kindsJSON string, candidates ...string) (*domainchannel.PlatformModel, bool, error) {
+func (s *Service) ensurePlatformModel(ctx context.Context, platformModelName string, kindsJSON string, protocol string, candidates ...string) (*domainchannel.PlatformModel, bool, error) {
 	if item, err := s.repo.GetModelByName(ctx, platformModelName); err == nil {
 		return item, false, nil
 	} else if !errors.Is(err, ErrModelNotFound) {
@@ -190,7 +190,7 @@ func (s *Service) ensurePlatformModel(ctx context.Context, platformModelName str
 		Vendor:            normalizeModelVendor("", platformModelName, strings.Join(candidates, " ")),
 		KindsJSON:         kindsJSON,
 		Icon:              normalizeModelIcon("", "", platformModelName, strings.Join(candidates, " ")),
-		CapabilitiesJSON:  "{}",
+		CapabilitiesJSON:  resolveNewModelCapabilitiesJSON("{}", "", kindsJSON, protocol),
 		Status:            "active",
 		Description:       "",
 	}

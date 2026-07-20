@@ -52,6 +52,7 @@ type CreateModelRequest struct {
 	KindsJSON          string `json:"kindsJSON,omitempty" binding:"omitempty,max=1000"`
 	Icon               string `json:"icon,omitempty" binding:"max=128"`
 	CapabilitiesJSON   string `json:"capabilitiesJSON,omitempty" binding:"max=10000"`
+	Protocol           string `json:"protocol,omitempty" binding:"omitempty,max=64"`
 	SystemPrompt       string `json:"systemPrompt,omitempty" binding:"max=20000"`
 	AccessScope        string `json:"accessScope,omitempty" binding:"omitempty,oneof=public internal"`
 	Status             string `json:"status,omitempty" binding:"omitempty,oneof=active inactive"`

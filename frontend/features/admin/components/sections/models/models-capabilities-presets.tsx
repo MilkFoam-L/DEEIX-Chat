@@ -329,6 +329,11 @@ function formatCapabilitiesJSON(value: Record<string, unknown>): string {
   return Object.keys(value).length > 0 ? JSON.stringify(value, null, 2) : "";
 }
 
+export function getSystemModelCapabilitiesPreset(protocol: AdminLLMAdapter): string {
+  const preset = MODEL_CAPABILITY_PRESETS.find((item) => item.protocol === protocol);
+  return preset ? formatCapabilitiesJSON(capabilityPresetPayload(preset)) : "";
+}
+
 function capabilityPresetMatched(preset: CapabilityPreset, routeProtocolSet: Set<string>): boolean {
   return routeProtocolSet.size === 0 || routeProtocolSet.has(resolveModelOptionPolicyProtocol(preset.protocol));
 }

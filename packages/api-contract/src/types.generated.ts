@@ -913,6 +913,8 @@ export interface CreateModelRequest {
    * @maxLength 128
    */
   platformModelName: string;
+  /** @maxLength 64 */
+  protocol?: string;
   status?: "active" | "inactive";
   /** @maxLength 20000 */
   systemPrompt?: string;

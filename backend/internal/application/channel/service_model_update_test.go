@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,143 @@ import (
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 )
+
+func TestCreateOpenAIConversationModelUsesResponsesCapabilitiesPreset(t *testing.T) {
+	repo := &modelUpdateRepo{}
+	service := NewService(config.Config{}, repo, nil, nil)
+
+	view, err := service.CreateModel(context.Background(), CreateModelInput{
+		PlatformModelName: "gpt-5.4",
+		Vendor:            "openai",
+		KindsJSON:         `["chat"]`,
+	})
+	if err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+	assertOpenAIResponsesCapabilities(t, view.CapabilitiesJSON)
+	assertOpenAIResponsesCapabilities(t, repo.createdModel.CapabilitiesJSON)
+}
+
+func TestCreateOpenAIConversationModelSkipsResponsesPresetForExplicitChatCompletions(t *testing.T) {
+	repo := &modelUpdateRepo{}
+	service := NewService(config.Config{}, repo, nil, nil)
+
+	view, err := service.CreateModel(context.Background(), CreateModelInput{
+		PlatformModelName: "gpt-4.1",
+		Vendor:            "openai",
+		KindsJSON:         `["chat"]`,
+		Protocol:          "openai_chat_completions",
+	})
+	if err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+	if view.CapabilitiesJSON != "" {
+		t.Fatalf("expected explicit Chat Completions model capabilities to stay empty, got %s", view.CapabilitiesJSON)
+	}
+}
+
+func TestCreateOpenAIConversationModelPreservesExplicitCapabilities(t *testing.T) {
+	repo := &modelUpdateRepo{}
+	service := NewService(config.Config{}, repo, nil, nil)
+	const capabilities = `{"defaultOptions":{"reasoning":{"effort":"low"}}}`
+
+	view, err := service.CreateModel(context.Background(), CreateModelInput{
+		PlatformModelName: "gpt-5.4",
+		Vendor:            "openai",
+		KindsJSON:         `["audio"]`,
+		CapabilitiesJSON:  capabilities,
+	})
+	if err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+	if view.CapabilitiesJSON != capabilities {
+		t.Fatalf("expected explicit capabilities to be preserved, got %s", view.CapabilitiesJSON)
+	}
+}
+
+func TestCreateModelDoesNotUseOpenAIResponsesPresetForOtherModels(t *testing.T) {
+	tests := []CreateModelInput{
+		{PlatformModelName: "claude-sonnet", Vendor: "anthropic", KindsJSON: `["chat"]`},
+		{PlatformModelName: "gpt-image-1", Vendor: "openai", KindsJSON: `["image_gen"]`},
+	}
+	for _, input := range tests {
+		repo := &modelUpdateRepo{}
+		service := NewService(config.Config{}, repo, nil, nil)
+		view, err := service.CreateModel(context.Background(), input)
+		if err != nil {
+			t.Fatalf("CreateModel(%q) error = %v", input.PlatformModelName, err)
+		}
+		if view.CapabilitiesJSON != "" {
+			t.Fatalf("expected %q capabilities to stay empty, got %s", input.PlatformModelName, view.CapabilitiesJSON)
+		}
+	}
+}
+
+func TestEnsurePlatformModelUsesResponsesPresetOnlyForNewResponsesModels(t *testing.T) {
+	repo := &modelUpdateRepo{}
+	service := NewService(config.Config{}, repo, nil, nil)
+
+	model, created, err := service.ensurePlatformModel(context.Background(), "gpt-5.4", `["chat"]`, "openai_responses", "gpt-5.4")
+	if err != nil {
+		t.Fatalf("ensurePlatformModel() error = %v", err)
+	}
+	if !created {
+		t.Fatal("expected platform model to be created")
+	}
+	assertOpenAIResponsesCapabilities(t, model.CapabilitiesJSON)
+}
+
+func TestEnsurePlatformModelDoesNotBackfillExistingModel(t *testing.T) {
+	existing := &domainchannel.PlatformModel{
+		ID:                7,
+		PlatformModelName: "gpt-existing",
+		Vendor:            "openai",
+		KindsJSON:         `["chat"]`,
+		CapabilitiesJSON:  "{}",
+	}
+	repo := &modelUpdateRepo{existingModel: existing}
+	service := NewService(config.Config{}, repo, nil, nil)
+
+	model, created, err := service.ensurePlatformModel(context.Background(), "gpt-existing", `["chat"]`, "openai_responses", "gpt-existing")
+	if err != nil {
+		t.Fatalf("ensurePlatformModel() error = %v", err)
+	}
+	if created {
+		t.Fatal("expected existing platform model to be reused")
+	}
+	if model.CapabilitiesJSON != "{}" {
+		t.Fatalf("expected existing capabilities to remain unchanged, got %s", model.CapabilitiesJSON)
+	}
+	if repo.createdModel.PlatformModelName != "" {
+		t.Fatal("expected repository CreateModel not to be called")
+	}
+}
+
+func TestEnsurePlatformModelKeepsEmptyCapabilitiesForChatCompletions(t *testing.T) {
+	repo := &modelUpdateRepo{}
+	service := NewService(config.Config{}, repo, nil, nil)
+
+	model, created, err := service.ensurePlatformModel(context.Background(), "custom-chat", `["chat"]`, "openai_chat_completions", "custom-chat")
+	if err != nil {
+		t.Fatalf("ensurePlatformModel() error = %v", err)
+	}
+	if !created {
+		t.Fatal("expected platform model to be created")
+	}
+	if model.CapabilitiesJSON != "{}" {
+		t.Fatalf("expected empty capabilities object, got %s", model.CapabilitiesJSON)
+	}
+}
+
+func assertOpenAIResponsesCapabilities(t *testing.T, raw string) {
+	t.Helper()
+	if raw == "" || raw == "{}" {
+		t.Fatalf("expected OpenAI Responses capabilities preset, got %q", raw)
+	}
+	if !strings.Contains(raw, `"reasoning"`) || !strings.Contains(raw, `"openai.code_interpreter"`) || !strings.Contains(raw, `"openai.web_search"`) {
+		t.Fatalf("unexpected OpenAI Responses capabilities preset: %s", raw)
+	}
+}
 
 func TestDeleteModelsWithoutSourcesReturnsDeletedCountAndInvalidatesCatalog(t *testing.T) {
 	repo := &modelUpdateRepo{deleteWithoutSourcesCount: 2}
@@ -203,6 +341,8 @@ func TestListUpstreamsNormalizesCircuitOpenModelCount(t *testing.T) {
 
 type modelUpdateRepo struct {
 	model                     domainchannel.PlatformModel
+	createdModel              domainchannel.PlatformModel
+	existingModel             *domainchannel.PlatformModel
 	modelRows                 []repository.ChannelModelListRow
 	upstreamRows              []repository.ChannelUpstreamListRow
 	activeBindingCodes        []string
@@ -234,7 +374,8 @@ func (r *modelUpdateRepo) ListUpstreams(context.Context, repository.ListChannelU
 	return r.upstreamRows, int64(len(r.upstreamRows)), nil
 }
 
-func (r *modelUpdateRepo) CreateModel(context.Context, *domainchannel.PlatformModel) error {
+func (r *modelUpdateRepo) CreateModel(_ context.Context, model *domainchannel.PlatformModel) error {
+	r.createdModel = *model
 	return nil
 }
 
@@ -297,7 +438,11 @@ func (r *modelUpdateRepo) GetModelListRowByID(context.Context, uint) (*repositor
 }
 
 func (r *modelUpdateRepo) GetModelByName(context.Context, string) (*domainchannel.PlatformModel, error) {
-	return nil, repository.ErrNotFound
+	if r.existingModel != nil {
+		model := *r.existingModel
+		return &model, nil
+	}
+	return nil, ErrModelNotFound
 }
 
 func (r *modelUpdateRepo) GetActiveModelByName(context.Context, string) (*domainchannel.PlatformModel, error) {

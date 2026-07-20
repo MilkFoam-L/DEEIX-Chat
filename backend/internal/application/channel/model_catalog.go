@@ -47,6 +47,93 @@ var protocolDefaultKindOrder = []string{
 	modelKindVideoGen,
 }
 
+const openAIResponsesCapabilitiesPresetJSON = `{
+  "defaultOptions": {
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    },
+    "text": {
+      "verbosity": "medium"
+    },
+    "store": false
+  },
+  "optionControls": [
+    {
+      "path": "reasoning.effort",
+      "type": "select",
+      "label": "Reasoning Effort",
+      "options": ["minimal", "low", "medium", "high", "xhigh"]
+    },
+    {
+      "path": "reasoning.summary",
+      "type": "select",
+      "label": "Reasoning Summary",
+      "options": ["auto", "concise", "detailed"]
+    },
+    {
+      "path": "text.verbosity",
+      "type": "select",
+      "label": "Text Verbosity",
+      "options": ["low", "medium", "high"]
+    },
+    {
+      "path": "store",
+      "type": "boolean",
+      "label": "Store"
+    }
+  ],
+  "nativeTools": [
+    {
+      "key": "openai.code_interpreter",
+      "protocols": ["openai_responses"],
+      "label": "Code Interpreter",
+      "enabled": true,
+      "defaultEnabled": true,
+      "payload": {
+        "container": {
+          "type": "auto"
+        },
+        "type": "code_interpreter"
+      },
+      "provider": "OpenAI",
+      "type": "code_interpreter",
+      "description": "OpenAI hosted code interpreter with an automatic container."
+    },
+    {
+      "key": "openai.web_search",
+      "protocols": ["openai_chat_completions", "openai_responses"],
+      "label": "Web Search",
+      "enabled": true,
+      "defaultEnabled": true,
+      "payload": {
+        "type": "web_search"
+      },
+      "provider": "OpenAI",
+      "type": "web_search",
+      "description": "OpenAI hosted web search."
+    }
+  ]
+}`
+
+func resolveNewModelCapabilitiesJSON(raw string, vendor string, kindsJSON string, protocol string) string {
+	normalized := strings.TrimSpace(raw)
+	if normalized != "" {
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(normalized), &payload); err != nil || payload == nil || len(payload) > 0 {
+			return normalized
+		}
+	}
+
+	kinds := parseKinds(kindsJSON)
+	conversationModel := hasModelKind(kinds, modelKindChat) || hasModelKind(kinds, modelKindAudio)
+	usesResponses := strings.TrimSpace(strings.ToLower(protocol)) == llm.AdapterOpenAIResponses
+	if conversationModel && (usesResponses || (strings.TrimSpace(protocol) == "" && normalizeModelVendor(vendor, "") == compatibleOpenAI)) {
+		return openAIResponsesCapabilitiesPresetJSON
+	}
+	return normalized
+}
+
 func normalizeCompatible(raw string) string {
 	switch strings.TrimSpace(strings.ToLower(raw)) {
 	case compatibleAnthropic:
@@ -112,8 +199,8 @@ func systemFallbackProtocols(compatible string) map[string]string {
 	switch normalizeCompatible(compatible) {
 	case compatibleOpenAI:
 		return map[string]string{
-			modelKindChat:      llm.AdapterOpenAIChatCompletions,
-			modelKindAudio:     llm.AdapterOpenAIChatCompletions,
+			modelKindChat:      llm.AdapterOpenAIResponses,
+			modelKindAudio:     llm.AdapterOpenAIResponses,
 			modelKindImageGen:  protocolOpenAIImageGenerations,
 			modelKindImageEdit: protocolOpenAIImageEdits,
 			modelKindVideoGen:  protocolOpenAIVideoGenerations,

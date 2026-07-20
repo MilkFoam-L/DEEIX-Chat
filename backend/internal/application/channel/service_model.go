@@ -335,9 +335,16 @@ func (s *Service) CreateModel(ctx context.Context, input CreateModelInput) (*Mod
 	if err != nil {
 		return nil, err
 	}
-	if err := validateOptionalJSON(strings.TrimSpace(input.CapabilitiesJSON)); err != nil {
+	capabilitiesJSON := strings.TrimSpace(input.CapabilitiesJSON)
+	if err := validateOptionalJSON(capabilitiesJSON); err != nil {
 		return nil, ErrInvalidJSONConfig
 	}
+	protocol := strings.TrimSpace(strings.ToLower(input.Protocol))
+	if protocol != "" && (!isKnownProtocol(protocol) || !isProtocolAllowedForKinds(kindsJSON, protocol)) {
+		return nil, ErrInvalidAdapter
+	}
+	normalizedVendor := normalizeModelVendor(input.Vendor, platformModelName)
+	capabilitiesJSON = resolveNewModelCapabilitiesJSON(capabilitiesJSON, normalizedVendor, kindsJSON, protocol)
 	systemPrompt := strings.TrimSpace(input.SystemPrompt)
 	if len([]rune(systemPrompt)) > maxSystemPromptChars {
 		return nil, ErrSystemPromptTooLong
@@ -350,10 +357,10 @@ func (s *Service) CreateModel(ctx context.Context, input CreateModelInput) (*Mod
 
 	item := &domainchannel.PlatformModel{
 		PlatformModelName:  platformModelName,
-		Vendor:             normalizeModelVendor(input.Vendor, platformModelName),
+		Vendor:             normalizedVendor,
 		KindsJSON:          kindsJSON,
 		Icon:               normalizeModelIcon(input.Icon, input.Vendor, platformModelName),
-		CapabilitiesJSON:   strings.TrimSpace(input.CapabilitiesJSON),
+		CapabilitiesJSON:   capabilitiesJSON,
 		SystemPrompt:       systemPrompt,
 		AccessScope:        accessScope,
 		Status:             normalizeStatus(input.Status),

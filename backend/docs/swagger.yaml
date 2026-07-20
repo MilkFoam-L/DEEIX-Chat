@@ -2211,6 +2211,9 @@ definitions:
         maxLength: 128
         minLength: 2
         type: string
+      protocol:
+        maxLength: 64
+        type: string
       status:
         enum:
         - active
