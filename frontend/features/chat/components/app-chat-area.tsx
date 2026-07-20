@@ -24,6 +24,7 @@ import { useChatModelOptions } from "@/features/chat/hooks/use-chat-model-option
 import { useChatRuntime } from "@/features/chat/hooks/use-chat-runtime";
 import { useChatViewerProfile } from "@/features/chat/hooks/use-chat-viewer-profile";
 import { useChatScreenshot } from "@/features/chat/hooks/use-chat-screenshot";
+import { parseConversationLabelsJSON } from "@/shared/lib/conversation-labels";
 import { useChatVisualPrompt } from "@/features/chat/hooks/use-chat-visual-prompt";
 import { ChatInput } from "@/features/chat/components/sections/chat-input";
 import { ChatScreenshotPreviewDialog } from "@/features/chat/components/sections/chat-screenshot-preview-dialog";
@@ -46,6 +47,7 @@ import {
   sanitizeConversationOptions,
 } from "@/features/chat/model/conversation-options";
 import { useChatData } from "@/features/chat/hooks/use-chat-data";
+import { useNewConversationDefaults } from "@/features/chat/hooks/use-new-conversation-defaults";
 import { toPendingAttachment } from "@/features/chat/model/message-submit";
 import { getConversation } from "@/shared/api/conversation";
 import { listAvailableMCPTools } from "@/shared/api/mcp";
@@ -54,7 +56,6 @@ import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
 import type { ConversationDTO, ConversationOptions } from "@/shared/api/conversation.types";
 import type { FileObjectDTO } from "@/shared/api/file.types";
 import type { MCPToolDTO } from "@/shared/api/mcp.types";
-import { useTheme } from "@/shared/components/theme-provider";
 import { cn } from "@/lib/utils";
 
 const MODEL_OPTIONS_STORAGE_PREFIX = "deeix-chat:chat-model-options:";
@@ -209,6 +210,7 @@ export function AppChatArea() {
   const activeGenerationRunsRef = React.useRef<Set<string>>(new Set());
   const failedGenerationRunsRef = React.useRef<Set<string>>(new Set());
   const {
+    autoGenerateLabels,
     deleteFilesByDefault,
     loaded: chatPreferencesLoaded,
     reuseModelOptions,
@@ -220,6 +222,7 @@ export function AppChatArea() {
     touchByPublicID,
     renameByPublicID,
     regenerateTitleByPublicID,
+    updateLabelsByPublicID,
     setStarByPublicID,
     setProjectByPublicID,
     deleteByPublicID,
@@ -291,6 +294,10 @@ export function AppChatArea() {
     return projects.find((item) => item.publicID === routeProjectID) ?? null;
   }, [conversationID, projects, routeProjectID]);
   const newConversationProjectID = !conversationID ? routeProjectID ?? requestedNewConversationProjectID : "";
+  const newConversationProject = React.useMemo(
+    () => projects.find((item) => item.publicID === newConversationProjectID) ?? null,
+    [newConversationProjectID, projects],
+  );
   const prependNewConversationInContext = React.useCallback(
     (platformModelName?: string) => prependNewConversation(platformModelName, newConversationProjectID || undefined),
     [newConversationProjectID, prependNewConversation],
@@ -357,9 +364,32 @@ export function AppChatArea() {
     hasConversation: Boolean(conversationID),
   });
   const [defaultToolIDs, setDefaultToolIDs] = React.useState<number[]>([]);
-  const defaultToolIDsRef = React.useRef<number[]>([]);
+  const newConversationSelectionKey = `${newConversationRevision}:${newConversationProjectID || "unassigned"}`;
+  const newConversationDefaultMCPToolIDs = React.useMemo(
+    () => filterAvailableMCPToolIDs(
+      newConversationProject?.mcpDefaultMode === "custom"
+        ? newConversationProject.defaultMCPToolIDs
+        : defaultToolIDs,
+      availableTools,
+      mcpMaxSelectedTools,
+    ),
+    [availableTools, defaultToolIDs, mcpMaxSelectedTools, newConversationProject],
+  );
+  const newConversationDefaultSkillIDs = React.useMemo(
+    () => (newConversationProject?.defaultSkillIDs ?? []).slice(0, mcpMaxSelectedTools),
+    [mcpMaxSelectedTools, newConversationProject],
+  );
+  const { onSelectedSkillsChange, onSelectedToolsChange } = useNewConversationDefaults({
+    conversationID,
+    contextKey: newConversationSelectionKey,
+    defaultsPending: Boolean(newConversationProjectID && !newConversationProject),
+    defaultMCPToolIDs: newConversationDefaultMCPToolIDs,
+    defaultSkillIDs: newConversationDefaultSkillIDs,
+    toolsLoading,
+    setSelectedToolIDs,
+    setSelectedSkills,
+  });
   const htmlVisualPrompt = useChatVisualPrompt();
-  const { resolvedTheme } = useTheme();
   const initializedOptionsModelRef = React.useRef("");
   const selectedModelDefaultOptionsRef = React.useRef<ConversationOptions>({});
   const fileDragDepthRef = React.useRef(0);
@@ -470,13 +500,7 @@ export function AppChatArea() {
         setAvailableTools(tools);
         setDefaultToolIDs(userDefaultToolIDs);
         const availableIDs = new Set(tools.map((item) => item.id));
-        setSelectedToolIDs((previous) => {
-          const retained = previous.filter((id) => availableIDs.has(id));
-          if (retained.length > 0 || conversationID) {
-            return retained;
-          }
-          return userDefaultToolIDs.slice(0, mcpMaxSelectedTools);
-        });
+        setSelectedToolIDs((previous) => previous.filter((id) => availableIDs.has(id)));
       } catch {
         if (!cancelled) {
           setAvailableTools([]);
@@ -493,18 +517,7 @@ export function AppChatArea() {
     return () => {
       cancelled = true;
     };
-  }, [conversationID, mcpMaxSelectedTools, setSelectedToolIDs]);
-
-  React.useEffect(() => {
-    defaultToolIDsRef.current = defaultToolIDs;
-  }, [defaultToolIDs]);
-
-  React.useEffect(() => {
-    if (conversationID) {
-      return;
-    }
-    setSelectedToolIDs(filterAvailableMCPToolIDs(defaultToolIDsRef.current, availableTools, mcpMaxSelectedTools));
-  }, [availableTools, conversationID, mcpMaxSelectedTools, newConversationRevision, setSelectedToolIDs]);
+  }, [conversationID, setSelectedToolIDs]);
 
   const onDefaultToolIDsChange = React.useCallback(async (nextToolIDs: number[]) => {
     const nextDefaults = filterAvailableMCPToolIDs(nextToolIDs, availableTools, mcpMaxSelectedTools);
@@ -571,13 +584,13 @@ export function AppChatArea() {
     selectedToolIDs,
     selectedSkills,
     htmlVisualPromptEnabled: htmlVisualPrompt.enabled,
-    htmlVisualColorMode: resolvedTheme,
     options: modelOptionPolicyDisabled ? EMPTY_CONVERSATION_OPTIONS : options,
     draft,
     attachments,
     maxFilesPerMessage,
     uploading,
     restoreDraftOnFailure,
+    autoGenerateLabels,
     prependNewConversation: prependNewConversationInContext,
     onConversationCreated: setLocallyCreatedConversationID,
     touchByPublicID,
@@ -737,6 +750,10 @@ export function AppChatArea() {
     [currentConversation?.title, manualConversationTitle, t],
   );
   const activeConversationStarred = Boolean(currentConversation?.isStarred);
+  const activeConversationLabels = React.useMemo(
+    () => parseConversationLabelsJSON(currentConversation?.labelsJSON ?? "[]"),
+    [currentConversation?.labelsJSON],
+  );
   const activeConversationShared = currentConversation?.shareStatus === "active" && Boolean(currentConversation.shareID?.trim());
   const shareDefaultMessagePublicIDs = React.useMemo(
     () =>
@@ -837,6 +854,19 @@ export function AppChatArea() {
       throw error;
     }
   }, [actionConversationID, canOperateConversation, regenerateTitleByPublicID, t]);
+
+  const onUpdateActiveConversationLabels = React.useCallback(
+    async (labels: string[]) => {
+      if (!canOperateConversation) {
+        return;
+      }
+      const updated = await updateLabelsByPublicID(actionConversationID, labels);
+      if (!updated) {
+        throw new Error("conversation labels were not updated");
+      }
+    },
+    [actionConversationID, canOperateConversation, updateLabelsByPublicID],
+  );
 
   const onRequestDeleteActiveConversation = React.useCallback(() => {
     if (!canOperateConversation) {
@@ -1094,9 +1124,9 @@ export function AppChatArea() {
     onDraftChange: setDraft,
     onModelChange: setSelectedPlatformModelName,
     onModelCatalogRefresh: refreshModelCatalogForComposer,
-    onSelectedToolsChange: setSelectedToolIDs,
+    onSelectedToolsChange,
     maxSelectedSkills: mcpMaxSelectedTools,
-    onSelectedSkillsChange: setSelectedSkills,
+    onSelectedSkillsChange,
     onDefaultToolsChange: onDefaultToolIDsChange,
     onHTMLVisualPromptChange: htmlVisualPrompt.setEnabled,
     onOptionsChange: setModelOptions,
@@ -1179,6 +1209,8 @@ export function AppChatArea() {
                   onToggleStar={onToggleActiveConversationStar}
                   onRename={onRenameActiveConversation}
                   onAutoRename={onAutoRenameActiveConversation}
+                  labels={activeConversationLabels}
+                  onUpdateLabels={onUpdateActiveConversationLabels}
                   projectMenu={{
                     label: t("labelMenu.moveToProject"),
                     unassignedLabel: t("labelMenu.unassignedProject"),

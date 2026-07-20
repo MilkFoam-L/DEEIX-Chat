@@ -40,8 +40,8 @@ import {
 } from "@/features/chat/components/sections/chat-message-position-rail";
 import { cn } from "@/lib/utils";
 import { AppLogo, DeeixLogo } from "@/shared/components/app-logo";
+import { useBranding } from "@/shared/config/branding-provider";
 import { PoweredByDeeix } from "@/shared/components/powered-by-deeix";
-import { brandAssets } from "@/shared/lib/branding";
 
 function CompactDivider({ summaryPreview }: { summaryPreview: string }) {
   const t = useTranslations("chat.messages");
@@ -92,6 +92,8 @@ type ChatAreaProps = {
   onToggleStar?: () => void | Promise<void>;
   onRename?: (title: string) => void | Promise<void>;
   onAutoRename?: () => void | Promise<void>;
+  labels?: string[];
+  onUpdateLabels?: (labels: string[]) => void | Promise<void>;
   projectMenu?: React.ComponentProps<typeof ChatLabel>["projectMenu"];
   onShare?: () => void;
   shareActive?: boolean;
@@ -194,6 +196,8 @@ function ChatScreenshotMessageMeta({
 }
 
 function ChatScreenshotBrandMark({ placement }: { placement: "top" | "bottom" }) {
+  const branding = useBranding();
+
   return (
     <div
       className={cn(
@@ -207,9 +211,9 @@ function ChatScreenshotBrandMark({ placement }: { placement: "top" | "bottom" })
       {placement === "top" ? (
         <>
           <AppLogo width={65} height={20} className="h-5 w-auto opacity-75" />
-          {brandAssets.logo ? <PoweredByDeeix className="text-[10px]" /> : null}
+          {branding.logoURL ? <PoweredByDeeix className="text-[10px]" /> : null}
         </>
-      ) : brandAssets.logo ? (
+      ) : branding.logoURL ? (
         <>
           <AppLogo width={65} height={20} className="h-5 w-auto opacity-75" />
           <span aria-hidden="true" className="h-4 w-px bg-border" />
@@ -432,6 +436,8 @@ export function ChatArea({
   onToggleStar,
   onRename,
   onAutoRename,
+  labels,
+  onUpdateLabels,
   projectMenu,
   onShare,
   shareActive = false,
@@ -516,6 +522,8 @@ export function ChatArea({
             onToggleStar={canOperateConversation ? onToggleStar : undefined}
             onRename={canOperateConversation ? onRename : undefined}
             onAutoRename={canOperateConversation ? onAutoRename : undefined}
+            labels={labels}
+            onUpdateLabels={canOperateConversation ? onUpdateLabels : undefined}
             projectMenu={canOperateConversation ? projectMenu : undefined}
             onShare={canOperateConversation ? onShare : undefined}
             shareActive={shareActive}

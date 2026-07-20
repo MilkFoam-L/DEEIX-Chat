@@ -1,6 +1,11 @@
+import type { UpsertIdentityProviderRequest } from "@deeix/api-contract";
 import type { IdentityProviderDTO } from "@/shared/api/auth.types";
-import type { IdentityProviderPayload } from "@/features/admin/api/auth";
 import type { SettingsGrouped } from "@/shared/api/settings.types";
+
+export type IdentityProviderForm = Omit<UpsertIdentityProviderRequest, "loginEnabled" | "registrationEnabled"> & {
+  loginEnabled: boolean;
+  registrationEnabled: boolean;
+};
 
 export type LoginFieldType = "int" | "bool" | "string" | "password" | "textarea" | "select" | "tabs" | "button";
 
@@ -47,7 +52,7 @@ export type LoginSettingsGroup = {
 
 export type ProviderTemplate = {
   label: string;
-  form: Partial<IdentityProviderPayload> & Pick<IdentityProviderPayload, "type" | "name">;
+  form: Partial<IdentityProviderForm> & Pick<IdentityProviderForm, "type" | "name">;
 };
 
 type LoginSettingsTranslator = (key: string) => string;
@@ -113,7 +118,7 @@ export function buildLoginSettingsGroups(t: LoginSettingsTranslator): LoginSetti
   ];
 }
 
-export const DEFAULT_PROVIDER_FORM: IdentityProviderPayload = {
+export const DEFAULT_PROVIDER_FORM: IdentityProviderForm = {
   type: "oidc",
   name: "",
   slug: "",
@@ -442,7 +447,7 @@ export function validatePasswordLoginSettings(
   return undefined;
 }
 
-export function createProviderForm(overrides: Partial<IdentityProviderPayload>): IdentityProviderPayload {
+export function createProviderForm(overrides: Partial<IdentityProviderForm>): IdentityProviderForm {
   const form = {
     ...DEFAULT_PROVIDER_FORM,
     ...overrides,
@@ -455,7 +460,7 @@ export function createProviderForm(overrides: Partial<IdentityProviderPayload>):
   };
 }
 
-export function providerToForm(provider: IdentityProviderDTO): IdentityProviderPayload {
+export function providerToForm(provider: IdentityProviderDTO): IdentityProviderForm {
   return {
     type: provider.type,
     name: provider.name,

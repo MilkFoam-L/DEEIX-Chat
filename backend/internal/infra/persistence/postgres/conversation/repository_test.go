@@ -2,7 +2,9 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,69 @@ import (
 func TestTranslateErrorAllowsNil(t *testing.T) {
 	if err := translateError(nil); err != nil {
 		t.Fatalf("translateError(nil) = %v, want nil", err)
+	}
+}
+
+func TestConversationProjectDefaultsRoundTripAndDelete(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	ctx := context.Background()
+	project := domainconversation.ConversationProject{
+		UserID:            1,
+		PublicID:          "project_defaults",
+		Name:              "Project defaults",
+		MCPDefaultMode:    domainconversation.ConversationProjectMCPDefaultModeCustom,
+		DefaultMCPToolIDs: []uint{7, 3},
+		DefaultSkillIDs:   []uint{11, 5},
+		Status:            "active",
+	}
+	if err := repo.CreateConversationProject(ctx, &project); err != nil {
+		t.Fatalf("CreateConversationProject() error = %v", err)
+	}
+	if !reflect.DeepEqual(project.DefaultMCPToolIDs, []uint{7, 3}) || !reflect.DeepEqual(project.DefaultSkillIDs, []uint{11, 5}) {
+		t.Fatalf("created defaults = MCP %v Skills %v", project.DefaultMCPToolIDs, project.DefaultSkillIDs)
+	}
+
+	loaded, err := repo.GetConversationProjectByPublicID(ctx, 1, project.PublicID)
+	if err != nil {
+		t.Fatalf("GetConversationProjectByPublicID() error = %v", err)
+	}
+	if loaded.MCPDefaultMode != domainconversation.ConversationProjectMCPDefaultModeCustom ||
+		!reflect.DeepEqual(loaded.DefaultMCPToolIDs, []uint{7, 3}) ||
+		!reflect.DeepEqual(loaded.DefaultSkillIDs, []uint{11, 5}) {
+		t.Fatalf("loaded project defaults = %#v", loaded)
+	}
+
+	nextMCPToolIDs := []uint{}
+	nextSkillIDs := []uint{5}
+	inheritMode := domainconversation.ConversationProjectMCPDefaultModeInherit
+	updated, err := repo.UpdateConversationProjectMetadataByPublicID(ctx, 1, project.PublicID, domainconversation.ConversationProjectPatch{
+		MCPDefaultMode:    &inheritMode,
+		DefaultMCPToolIDs: &nextMCPToolIDs,
+		DefaultSkillIDs:   &nextSkillIDs,
+	})
+	if err != nil {
+		t.Fatalf("UpdateConversationProjectMetadataByPublicID() error = %v", err)
+	}
+	if updated.MCPDefaultMode != inheritMode || len(updated.DefaultMCPToolIDs) != 0 || !reflect.DeepEqual(updated.DefaultSkillIDs, nextSkillIDs) {
+		t.Fatalf("updated project defaults = %#v", updated)
+	}
+
+	if _, err = repo.DeleteConversationProjectByPublicID(ctx, 1, project.PublicID, false, false); err != nil {
+		t.Fatalf("DeleteConversationProjectByPublicID() error = %v", err)
+	}
+	var associationCount int64
+	if err = db.Model(&model.ConversationProjectMCPTool{}).Where("project_id = ?", project.ID).Count(&associationCount).Error; err != nil {
+		t.Fatalf("count project MCP associations: %v", err)
+	}
+	if associationCount != 0 {
+		t.Fatalf("project MCP association count = %d, want 0", associationCount)
+	}
+	if err = db.Model(&model.ConversationProjectSkill{}).Where("project_id = ?", project.ID).Count(&associationCount).Error; err != nil {
+		t.Fatalf("count project Skill associations: %v", err)
+	}
+	if associationCount != 0 {
+		t.Fatalf("project Skill association count = %d, want 0", associationCount)
 	}
 }
 
@@ -313,8 +378,7 @@ func TestUpdateConversationMetadataSQLiteUsesPortableTrim(t *testing.T) {
 	}
 
 	updated, err := repo.UpdateConversationMetadata(ctx, conversation.ID, repository.ConversationMetadataPatch{
-		Title:      "SQLite 标题",
-		LabelsJSON: `["技术"]`,
+		Title: "SQLite 标题",
 	})
 	if err != nil {
 		t.Fatalf("UpdateConversationMetadata() error = %v", err)
@@ -322,8 +386,118 @@ func TestUpdateConversationMetadataSQLiteUsesPortableTrim(t *testing.T) {
 	if updated.Title != "SQLite 标题" {
 		t.Fatalf("updated title = %q, want %q", updated.Title, "SQLite 标题")
 	}
-	if updated.LabelsJSON != `["技术"]` {
-		t.Fatalf("updated labels = %q, want %q", updated.LabelsJSON, `["技术"]`)
+}
+
+func TestUpdateConversationLabelsAppliesGeneratedLabelsWhenEligible(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	conversation := model.Conversation{
+		PublicID:   "generated-label-eligible",
+		UserID:     1,
+		Title:      "已有标题",
+		LabelsJSON: `[]`,
+		SessionKey: "generated-label-eligible-session",
+		Status:     "active",
+	}
+	if err := db.Create(&conversation).Error; err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	updated, applied, err := repo.SetGeneratedConversationLabelsIfEligible(context.Background(), conversation.ID, `["自动标签"]`)
+	if err != nil {
+		t.Fatalf("SetGeneratedConversationLabelsIfEligible() error = %v", err)
+	}
+	if !applied || updated.LabelsJSON != `["自动标签"]` {
+		t.Fatalf("generated labels were not applied: applied=%v labels=%q", applied, updated.LabelsJSON)
+	}
+}
+
+func TestUpdateConversationLabelsByPublicIDIsUserScopedAndMarksManualManagement(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	conversation := model.Conversation{
+		PublicID:   "manual-label-user-scope",
+		UserID:     1,
+		Title:      "已有标题",
+		LabelsJSON: `[]`,
+		SessionKey: "manual-label-user-scope-session",
+		Status:     "active",
+	}
+	if err := db.Create(&conversation).Error; err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	if _, err := repo.UpdateConversationLabelsByPublicID(context.Background(), 2, conversation.PublicID, `["越权标签"]`); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected other user update to return not found, got %v", err)
+	}
+	updated, err := repo.UpdateConversationLabelsByPublicID(context.Background(), 1, conversation.PublicID, `["手动标签"]`)
+	if err != nil {
+		t.Fatalf("UpdateConversationLabelsByPublicID() error = %v", err)
+	}
+	if updated.LabelsJSON != `["手动标签"]` || !updated.LabelsManuallyManaged {
+		t.Fatalf("manual labels were not persisted correctly: %#v", updated)
+	}
+}
+
+func TestUpdateConversationLabelsGeneratedLabelsDoNotOverwriteManualLabels(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	conversation := model.Conversation{
+		PublicID:              "generated-label-race",
+		UserID:                1,
+		Title:                 "已有标题",
+		LabelsJSON:            `["手动标签"]`,
+		LabelsManuallyManaged: true,
+		SessionKey:            "generated-label-race-session",
+		Status:                "active",
+	}
+	if err := db.Create(&conversation).Error; err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	updated, applied, err := repo.SetGeneratedConversationLabelsIfEligible(context.Background(), conversation.ID, `["自动标签"]`)
+	if err != nil {
+		t.Fatalf("SetGeneratedConversationLabelsIfEligible() error = %v", err)
+	}
+	if applied {
+		t.Fatal("generated labels update unexpectedly applied")
+	}
+	if updated.LabelsJSON != `["手动标签"]` {
+		t.Fatalf("generated labels overwrote manual labels: %q", updated.LabelsJSON)
+	}
+	if !updated.UpdatedAt.Equal(conversation.UpdatedAt) {
+		t.Fatalf("skipped generated labels changed updated_at: got %v, want %v", updated.UpdatedAt, conversation.UpdatedAt)
+	}
+}
+
+func TestUpdateConversationLabelsGeneratedLabelsDoNotRestoreManuallyClearedLabels(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	conversation := model.Conversation{
+		PublicID:              "generated-label-manual-clear-race",
+		UserID:                1,
+		Title:                 "已有标题",
+		LabelsJSON:            `[]`,
+		LabelsManuallyManaged: true,
+		SessionKey:            "generated-label-manual-clear-race-session",
+		Status:                "active",
+	}
+	if err := db.Create(&conversation).Error; err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	updated, applied, err := repo.SetGeneratedConversationLabelsIfEligible(context.Background(), conversation.ID, `["自动标签"]`)
+	if err != nil {
+		t.Fatalf("SetGeneratedConversationLabelsIfEligible() error = %v", err)
+	}
+	if applied {
+		t.Fatal("generated labels update unexpectedly applied")
+	}
+	if updated.LabelsJSON != `[]` {
+		t.Fatalf("generated labels restored manually cleared labels: %q", updated.LabelsJSON)
+	}
+	if !updated.UpdatedAt.Equal(conversation.UpdatedAt) {
+		t.Fatalf("skipped generated labels changed updated_at: got %v, want %v", updated.UpdatedAt, conversation.UpdatedAt)
 	}
 }
 
@@ -417,6 +591,26 @@ func TestListConversationsByUserSearchesMetadataProjectsAndMessages(t *testing.T
 		SessionKey: "session_message_search",
 		Status:     "active",
 	}
+	toolOnlyConversation := model.Conversation{
+		UserID:     1,
+		PublicID:   "conv_tool_only_search",
+		Title:      "Tool output",
+		LabelsJSON: "[]",
+		Model:      "gpt-test",
+		Provider:   "openai",
+		SessionKey: "session_tool_only_search",
+		Status:     "active",
+	}
+	wildcardConversation := model.Conversation{
+		UserID:     1,
+		PublicID:   "conv_literal_wildcard_search",
+		Title:      "Progress 100%",
+		LabelsJSON: "[]",
+		Model:      "gpt-test",
+		Provider:   "openai",
+		SessionKey: "session_literal_wildcard_search",
+		Status:     "active",
+	}
 	otherUserConversation := model.Conversation{
 		UserID:     2,
 		PublicID:   "conv_other_user",
@@ -431,6 +625,8 @@ func TestListConversationsByUserSearchesMetadataProjectsAndMessages(t *testing.T
 		projectConversation,
 		titleConversation,
 		messageConversation,
+		toolOnlyConversation,
+		wildcardConversation,
 		otherUserConversation,
 	} {
 		if err := db.Create(&conversation).Error; err != nil {
@@ -454,6 +650,22 @@ func TestListConversationsByUserSearchesMetadataProjectsAndMessages(t *testing.T
 	}).Error; err != nil {
 		t.Fatalf("create message: %v", err)
 	}
+	var toolOnlyTarget model.Conversation
+	if err := db.Where("public_id = ?", "conv_tool_only_search").First(&toolOnlyTarget).Error; err != nil {
+		t.Fatalf("load tool-only target: %v", err)
+	}
+	if err := db.Create(&model.Message{
+		ConversationID: toolOnlyTarget.ID,
+		UserID:         1,
+		PublicID:       "msg_tool_only_search",
+		Role:           "tool",
+		ContentType:    "text",
+		Content:        "InternalToolOnlyKeyword",
+		BranchReason:   "default",
+		Status:         "success",
+	}).Error; err != nil {
+		t.Fatalf("create tool-only message: %v", err)
+	}
 
 	tests := []struct {
 		name   string
@@ -463,6 +675,8 @@ func TestListConversationsByUserSearchesMetadataProjectsAndMessages(t *testing.T
 		{name: "title", query: "budget", wantID: "conv_title_search"},
 		{name: "project", query: "research", wantID: "conv_project_search"},
 		{name: "message", query: "aurorakeyword", wantID: "conv_message_search"},
+		{name: "literal wildcard", query: "%", wantID: "conv_literal_wildcard_search"},
+		{name: "tool messages are excluded", query: "internaltoolonlykeyword", wantID: ""},
 	}
 
 	for _, tt := range tests {
@@ -471,13 +685,145 @@ func TestListConversationsByUserSearchesMetadataProjectsAndMessages(t *testing.T
 			if err != nil {
 				t.Fatalf("ListConversationsByUser() error = %v", err)
 			}
-			if total != 1 {
-				t.Fatalf("total = %d, want 1; items=%#v", total, items)
+			if tt.wantID == "" {
+				if total != 0 || len(items) != 0 {
+					t.Fatalf("items = %#v, total = %d, want no results", items, total)
+				}
+				return
 			}
-			if len(items) != 1 || items[0].PublicID != tt.wantID {
+			if total != 1 || len(items) != 1 || items[0].PublicID != tt.wantID {
 				t.Fatalf("items = %#v, want %q", items, tt.wantID)
 			}
 		})
+	}
+}
+
+func TestListConversationsForSearchReturnsOrderedWindowWithoutStatusFiltering(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	ctx := context.Background()
+	now := time.Now()
+
+	items := []model.Conversation{
+		{
+			BaseModel:  model.BaseModel{UpdatedAt: now.Add(-2 * time.Hour)},
+			UserID:     1,
+			PublicID:   "conv_search_oldest",
+			Title:      "Needle oldest",
+			LabelsJSON: "[]",
+			Model:      "gpt-test",
+			Provider:   "openai",
+			SessionKey: "session_search_oldest",
+			Status:     "active",
+		},
+		{
+			BaseModel:  model.BaseModel{UpdatedAt: now.Add(-time.Hour)},
+			UserID:     1,
+			PublicID:   "conv_search_middle",
+			Title:      "Needle middle",
+			LabelsJSON: "[]",
+			Model:      "gpt-test",
+			Provider:   "openai",
+			SessionKey: "session_search_middle",
+			Status:     "archived",
+		},
+		{
+			BaseModel:  model.BaseModel{UpdatedAt: now},
+			UserID:     1,
+			PublicID:   "conv_search_latest",
+			Title:      "Needle latest",
+			LabelsJSON: "[]",
+			Model:      "gpt-test",
+			Provider:   "openai",
+			SessionKey: "session_search_latest",
+			Status:     "active",
+		},
+	}
+	if err := db.Create(&items).Error; err != nil {
+		t.Fatalf("create conversations: %v", err)
+	}
+
+	results, err := repo.ListConversationsForSearch(ctx, 1, 1, 2, "needle")
+	if err != nil {
+		t.Fatalf("ListConversationsForSearch() error = %v", err)
+	}
+	if len(results) != 2 || results[0].PublicID != "conv_search_middle" || results[1].PublicID != "conv_search_oldest" {
+		t.Fatalf("results = %#v, want middle and oldest conversations", results)
+	}
+}
+
+func TestListLatestBranchPreviewMessagesReturnsLatestVisibleWindow(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	ctx := context.Background()
+
+	conversation := model.Conversation{
+		UserID:     1,
+		PublicID:   "conv_latest_branch_preview",
+		Title:      "Latest branch preview",
+		LabelsJSON: "[]",
+		Model:      "gpt-test",
+		Provider:   "openai",
+		SessionKey: "session_latest_branch_preview",
+		Status:     "active",
+	}
+	if err := db.Create(&conversation).Error; err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	createMessage := func(publicID string, role string, parentID *uint) model.Message {
+		t.Helper()
+		item := model.Message{
+			ConversationID:  conversation.ID,
+			UserID:          1,
+			PublicID:        publicID,
+			ParentMessageID: parentID,
+			Role:            role,
+			ContentType:     "text",
+			Content:         publicID + " content",
+			BranchReason:    "default",
+			Status:          "success",
+		}
+		if err := db.Create(&item).Error; err != nil {
+			t.Fatalf("create message %q: %v", publicID, err)
+		}
+		return item
+	}
+
+	root := createMessage("msg_root", "user", nil)
+	rootID := root.ID
+	createMessage("msg_old_branch", "assistant", &rootID)
+
+	latestBranch := createMessage("msg_latest_branch", "assistant", &rootID)
+	latestVisibleIDs := []string{root.PublicID, latestBranch.PublicID}
+	parentID := latestBranch.ID
+	for i := 1; i <= 12; i++ {
+		role := "user"
+		if i%2 == 0 {
+			role = "assistant"
+		}
+		item := createMessage(fmt.Sprintf("msg_latest_%02d", i), role, &parentID)
+		latestVisibleIDs = append(latestVisibleIDs, item.PublicID)
+		parentID = item.ID
+	}
+	createMessage("msg_latest_tool", "tool", &parentID)
+
+	items, err := repo.ListLatestBranchPreviewMessages(ctx, conversation.ID, 100, 10)
+	if err != nil {
+		t.Fatalf("ListLatestBranchPreviewMessages() error = %v", err)
+	}
+	if len(items) != 10 {
+		t.Fatalf("len(items) = %d, want 10", len(items))
+	}
+
+	wantPublicIDs := latestVisibleIDs[len(latestVisibleIDs)-10:]
+	for i, item := range items {
+		if item.PublicID != wantPublicIDs[i] {
+			t.Fatalf("items[%d].PublicID = %q, want %q", i, item.PublicID, wantPublicIDs[i])
+		}
+		if item.Role != "user" && item.Role != "assistant" {
+			t.Fatalf("items[%d].Role = %q, want visible role", i, item.Role)
+		}
 	}
 }
 
@@ -494,7 +840,7 @@ func openConversationRepositoryTestDB(t *testing.T) *gorm.DB {
 			_ = sqlDB.Close()
 		}
 	})
-	if err := db.AutoMigrate(&model.Conversation{}, &model.ConversationProject{}, &model.ConversationShare{}, &model.Message{}, &model.Attachment{}, &model.FileObject{}, &model.ConversationRun{}, &model.ChatRunEvent{}); err != nil {
+	if err := db.AutoMigrate(&model.Conversation{}, &model.ConversationProject{}, &model.ConversationProjectMCPTool{}, &model.ConversationProjectSkill{}, &model.ConversationShare{}, &model.Message{}, &model.Attachment{}, &model.FileObject{}, &model.ConversationRun{}, &model.ChatRunEvent{}); err != nil {
 		t.Fatalf("migrate models: %v", err)
 	}
 	return db
