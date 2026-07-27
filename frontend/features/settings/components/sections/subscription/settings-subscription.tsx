@@ -109,7 +109,7 @@ export function SettingsSubscription() {
   const [paymentDialogOpen, setPaymentDialogOpen] = React.useState(false);
   const [selectedPlan, setSelectedPlan] = React.useState<BillingPlanDTO | null>(null);
   const [selectedPrice, setSelectedPrice] = React.useState<BillingPlanPriceDTO | null>(null);
-  const [selectedPaymentProvider, setSelectedPaymentProvider] = React.useState<PaymentProvider>("stripe");
+  const [selectedPaymentProvider, setSelectedPaymentProvider] = React.useState<PaymentProvider>("epay");
   const [selectedEPayType, setSelectedEPayType] = React.useState("alipay");
   const [topUpDialogOpen, setTopUpDialogOpen] = React.useState(false);
   const [redemptionDialogOpen, setRedemptionDialogOpen] = React.useState(false);
@@ -231,11 +231,14 @@ export function SettingsSubscription() {
     const values = billingConfig?.epayTypes?.filter((item) => item.type.trim()) ?? [];
     return values.length > 0 ? values : [{ name: epayLabels.alipay, type: "alipay" }, { name: epayLabels.wxpay, type: "wxpay" }];
   }, [billingConfig?.epayTypes, epayLabels.alipay, epayLabels.wxpay]);
-  const paymentProviders = React.useMemo(() => billingConfig?.paymentProviders?.filter((item) => item === "stripe" || item === "epay") ?? [], [billingConfig?.paymentProviders]);
+  const paymentProviders = React.useMemo<PaymentProvider[]>(
+    () => billingConfig?.paymentProviders?.filter((item): item is PaymentProvider => item === "epay") ?? [],
+    [billingConfig?.paymentProviders],
+  );
 
   React.useEffect(() => {
     if (paymentProviders.length > 0 && !paymentProviders.includes(selectedPaymentProvider)) {
-      setSelectedPaymentProvider(paymentProviders[0] ?? "stripe");
+      setSelectedPaymentProvider(paymentProviders[0] ?? "epay");
     }
   }, [paymentProviders, selectedPaymentProvider]);
 
